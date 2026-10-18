@@ -1,0 +1,6 @@
+{
+  "name": "GBHS Computer Operator Record Management",
+  "description": "Offline-first, installable PWA for GBHS Computer Operator student records (Class 7-9), daily attendance, Excel import, and resilient IndexedDB-Supabase sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

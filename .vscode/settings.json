@@ -1,0 +1,6 @@
+{
+  "files.associations": {
+    "bun.lock": "jsonc"
+  },
+  "task.allowAutomaticTasks": "on"
+}

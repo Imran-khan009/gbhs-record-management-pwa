@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e3a8a" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#2563eb" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="url(#bg)"/>
+  <!-- Inner circular badge -->
+  <circle cx="256" cy="256" r="210" fill="none" stroke="#38bdf8" stroke-width="6" stroke-dasharray="16 10" opacity="0.6"/>
+  <!-- Graduation cap & school book emblem -->
+  <path d="M256 120 L380 180 L256 240 L132 180 Z" fill="#ffffff" />
+  <path d="M380 180 L380 240" stroke="#facc15" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="380" cy="246" r="8" fill="#facc15"/>
+  <!-- Laptop base & screen -->
+  <rect x="156" y="260" width="200" height="120" rx="12" fill="#0f172a" stroke="#38bdf8" stroke-width="8"/>
+  <!-- Screen display -->
+  <rect x="172" y="276" width="168" height="88" rx="6" fill="#1e293b"/>
+  <!-- Screen content: Class 7 8 9 records -->
+  <rect x="188" y="292" width="48" height="10" rx="3" fill="#38bdf8"/>
+  <rect x="188" y="308" width="80" height="8" rx="2" fill="#94a3b8"/>
+  <rect x="188" y="322" width="100" height="8" rx="2" fill="#94a3b8"/>
+  <rect x="188" y="336" width="60" height="8" rx="2" fill="#34d399"/>
+  <!-- Checkmark badge on screen -->
+  <circle cx="310" cy="305" r="14" fill="#10b981"/>
+  <path d="M304 305 L308 309 L316 301" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Laptop keyboard deck -->
+  <path d="M120 380 L392 380 L370 400 L142 400 Z" fill="#94a3b8"/>
+  <rect x="220" y="388" width="72" height="6" rx="3" fill="#475569"/>
+  <!-- Text GBHS -->
+  <text x="256" y="445" font-family="system-ui, sans-serif" font-size="34" font-weight="900" fill="#ffffff" text-anchor="middle" letter-spacing="4">GBHS OPS</text>
+</svg>
