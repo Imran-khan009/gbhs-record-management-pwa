@@ -23,11 +23,11 @@ jobs:
         with:
           bun-version: latest
 
-      - name: Setup Java JDK 17
+      - name: Setup Java JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
           cache: 'gradle'
 
       - name: Install Project Dependencies
