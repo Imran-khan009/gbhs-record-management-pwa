@@ -28,9 +28,7 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+          cache: 'gradle'
 
       - name: Install Project Dependencies
         run: bun install --frozen-lockfile
@@ -47,6 +45,8 @@ jobs:
       - name: Build Android Debug APK
         working-directory: ./android
         run: ./gradlew assembleDebug --stacktrace
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
 
       - name: Rename APK for clarity
         run: |
