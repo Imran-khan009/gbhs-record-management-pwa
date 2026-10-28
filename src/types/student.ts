@@ -1,6 +1,17 @@
-export type ClassLevel = 'Class 7' | 'Class 8' | 'Class 9';
+export type ClassLevel =
+  | 'Class 1'
+  | 'Class 2'
+  | 'Class 3'
+  | 'Class 4'
+  | 'Class 5'
+  | 'Class 6'
+  | 'Class 7'
+  | 'Class 8'
+  | 'Class 9'
+  | 'Class 10'
+  | string;
 export type Section = 'A' | 'B' | 'C' | 'General';
-export type StudentStatus = 'Active' | 'Inactive' | 'Transferred';
+export type StudentStatus = 'Active' | 'Inactive' | 'Withdrawn' | 'Transferred';
 
 export interface Student {
   id: string; // Stable UUID (client-generated)
@@ -27,6 +38,14 @@ export interface Student {
   address?: string;
   status: StudentStatus; // Synced with registeredStatus
 
+  // Lifecycle & history attributes
+  withdrawalReason?: string;
+  withdrawnDate?: string;
+  transferDetails?: string;
+  transferredDate?: string;
+  replacedStudentId?: string; // ID of student this student replaced
+  replacementStudentId?: string; // ID of student who replaced this student
+
   admissionDate?: string;
   bFormNo?: string;
   fatherCnic?: string;
@@ -51,6 +70,8 @@ export interface Student {
   createdAt: string; // ISO 8601
   schoolId: string;
   createdBy: string;
+  owner_id?: string;
+  ownerId?: string;
 }
 
 export type AttendanceStatus = 'Present' | 'Absent' | 'Leave' | 'Late';
@@ -69,6 +90,8 @@ export interface AttendanceRecord {
   updatedAt: string;
   schoolId: string;
   markedBy: string;
+  owner_id?: string;
+  ownerId?: string;
 }
 
 export interface StudentImportRow {

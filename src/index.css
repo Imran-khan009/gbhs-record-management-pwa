@@ -1,1 +1,295 @@
 @import "tailwindcss";
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* =========================================================
+   PALETTE & DESIGN SYSTEM
+   - Primary Charcoal: #202822 (main background, sidebar, navigation, dark surfaces)
+   - Secondary Charcoal: #2B352E (cards, panels, dropdowns, elevated surfaces)
+   - Warm Ivory: #F6F3EA (primary text, light mode canvas)
+   - Muted Sage: #9BAE9C (secondary accents, subtle borders, supporting indicators)
+   - Copper: #D97745 (primary action buttons, selected highlights, important accents)
+   ========================================================= */
+
+@theme {
+  --color-slate-850: #141c2e;
+  --color-slate-750: #243144;
+
+  /* Exact brand palette tokens */
+  --color-charcoal-primary: #202822;
+  --color-charcoal-secondary: #2B352E;
+  --color-charcoal-surface: #344038;
+  --color-charcoal-elevated: #3D4A41;
+  --color-charcoal-border: rgba(155, 174, 156, 0.2);
+
+  --color-warm-ivory: #F6F3EA;
+  --color-warm-ivory-dim: #E8E3D5;
+  --color-warm-ivory-dark: #DDD6C5;
+
+  --color-muted-sage: #9BAE9C;
+  --color-muted-sage-light: #B4C4B5;
+  --color-muted-sage-dark: #7D927E;
+
+  --color-copper: #D97745;
+  --color-copper-hover: #C56837;
+  --color-copper-active: #B35B2B;
+  --color-copper-light: #E48B5D;
+}
+
+/* Base Dark Theme (Default Console Aesthetics - Primary Charcoal #202822) */
+:root,
+html.dark {
+  color-scheme: dark;
+  --color-slate-950: #202822; /* Primary Charcoal background */
+  --color-slate-900: #2B352E; /* Secondary Charcoal cards/panels */
+  --color-slate-850: #333F36; /* Sub-surfaces / elevated headers */
+  --color-slate-800: #3D4A41; /* Borders / divider lines */
+  --color-slate-750: #47574C; /* Secondary borders / chips */
+  --color-slate-700: #54665A; /* Input borders / icon borders */
+  --color-slate-600: #768B7C; /* Tertiary text */
+  --color-slate-500: #9BAE9C; /* Muted Sage for secondary icons / labels */
+  --color-slate-400: #9BAE9C; /* Muted Sage for clear body text */
+  --color-slate-300: #CCD6CD; /* Clear body text */
+  --color-slate-200: #E6ECE7; /* Strong text / section headings */
+  --color-slate-100: #F6F3EA; /* Warm Ivory primary titles */
+  --color-slate-50: #FFFFFF;
+}
+
+html.dark body {
+  background-color: #202822;
+  color: #F6F3EA;
+}
+
+/* ---------------------------------------------------------
+   LIGHT MODE DESIGN TOKENS & SURFACE MAPPINGS (Warm Ivory #F6F3EA)
+   --------------------------------------------------------- */
+html.light {
+  color-scheme: light;
+
+  /* Slate neutral ramp inverted for crisp, modern light mode */
+  --color-slate-950: #f8fafc; /* Main application background (slate-50) */
+  --color-slate-900: #ffffff; /* Card / panel / modal surface (pure white) */
+  --color-slate-850: #f1f5f9; /* Table headers / card sub-headers / secondary cards (slate-100) */
+  --color-slate-800: #e2e8f0; /* Borders / divider lines / subtle button bg (slate-200) */
+  --color-slate-750: #cbd5e1; /* Secondary borders / chips (slate-300) */
+  --color-slate-700: #cbd5e1; /* Input borders / icon borders (slate-300) */
+  --color-slate-600: #64748b; /* Muted icons / tertiary text (slate-500) */
+  --color-slate-500: #64748b; /* Secondary labels / placeholders (slate-500) */
+  --color-slate-400: #475569; /* Clear, high-legibility body text (slate-600) */
+  --color-slate-300: #334155; /* Prominent body text (slate-700) */
+  --color-slate-200: #1e293b; /* Strong text / section headings (slate-800) */
+  --color-slate-100: #0f172a; /* Primary titles / highest contrast (slate-900) */
+  --color-slate-50: #020617;  /* Deepest contrast */
+
+  /* Semantic status badges */
+  --color-emerald-950: #d1fae5;
+  --color-emerald-900: #a7f3d0;
+  --color-emerald-800: #6ee7b7;
+  --color-emerald-400: #059669;
+
+  --color-amber-950: #fef3c7;
+  --color-amber-900: #fde68a;
+  --color-amber-800: #fcd34d;
+  --color-amber-400: #d97706;
+
+  --color-rose-950: #ffe4e6;
+  --color-rose-900: #fecdd3;
+  --color-rose-800: #fda4af;
+  --color-rose-400: #e11d48;
+}
+
+/* ---------------------------------------------------------
+   LIGHT MODE TYPOGRAPHY & COMPONENT REFINEMENTS
+   --------------------------------------------------------- */
+html.light body {
+  background-color: #F6F3EA;
+  color: #202822;
+}
+
+/* Headings and titles adapt to Primary Charcoal in light mode */
+html.light h1.text-white,
+html.light h2.text-white,
+html.light h3.text-white,
+html.light h4.text-white,
+html.light h5.text-white,
+html.light h6.text-white,
+html.light th.text-white,
+html.light td.text-white,
+html.light table .text-white,
+html.light .light-text-dark {
+  color: #202822;
+}
+
+html.light p.text-white:not(
+  button *, 
+  a *, 
+  [class*="bg-copper"] *,
+  [class*="bg-emerald-"] *, 
+  [class*="bg-rose-"] *, 
+  [class*="bg-amber-"] *
+),
+html.light span.text-white:not(
+  button *, 
+  a *, 
+  [class*="bg-copper"] *,
+  [class*="bg-emerald-"] *, 
+  [class*="bg-rose-"] *, 
+  [class*="bg-amber-"] *
+),
+html.light div.text-white:not(
+  button *, 
+  a *, 
+  [class*="bg-copper"] *,
+  [class*="bg-emerald-"] *, 
+  [class*="bg-rose-"] *, 
+  [class*="bg-amber-"] *
+) {
+  color: #202822;
+}
+
+/* Action button text preserved as white */
+html.light button.bg-sky-600,
+html.light button.bg-sky-500,
+html.light button.bg-emerald-600,
+html.light button.bg-rose-600,
+html.light button.bg-amber-600,
+html.light button[class*="bg-[#D97745]"],
+html.light button[class*="bg-copper"] {
+  color: #ffffff !important;
+}
+
+html.light button.bg-sky-600 *,
+html.light button.bg-sky-500 *,
+html.light button[class*="bg-[#D97745]"] *,
+html.light button[class*="bg-copper"] * {
+  color: #ffffff;
+}
+
+/* Ghost buttons */
+html.light button.text-slate-400.hover\:text-white:hover,
+html.light button.text-slate-300.hover\:text-white:hover {
+  color: #202822;
+}
+
+/* Modal Backdrops in Light Mode */
+html.light .bg-black\/80,
+html.light .bg-black\/75,
+html.light .bg-black\/70,
+html.light .bg-black\/85,
+html.light .bg-black\/60 {
+  background-color: rgba(32, 40, 34, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* Input Fields in Light Mode */
+html.light input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+html.light select,
+html.light textarea {
+  color: #202822 !important;
+  background-color: #ffffff !important;
+  border-color: #DDD6C5 !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #7D927E !important;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+html.dark ::-webkit-scrollbar-track {
+  background: #202822;
+}
+html.dark ::-webkit-scrollbar-thumb {
+  background: #3D4A41;
+  border-radius: 9999px;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #9BAE9C;
+}
+html.light ::-webkit-scrollbar-track {
+  background: #EFECE1;
+}
+html.light ::-webkit-scrollbar-thumb {
+  background: #DDD8C9;
+  border-radius: 9999px;
+}
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #9BAE9C;
+}
+
+/* Premium Button Micro-Interactions */
+.btn-interactive {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 140ms cubic-bezier(0.16, 1, 0.3, 1),
+              box-shadow 140ms cubic-bezier(0.16, 1, 0.3, 1),
+              background-color 140ms ease,
+              border-color 140ms ease,
+              color 140ms ease;
+  user-select: none;
+}
+.btn-interactive:hover:not(:disabled) {
+  transform: translateY(-1.5px);
+}
+.btn-interactive:active:not(:disabled) {
+  transform: scale(0.975) translateY(0);
+}
+.btn-interactive:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #202822, 0 0 0 4px #D97745;
+}
+.btn-interactive:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+/* Module View Transition - Subtle, instantaneous 140ms enter */
+@keyframes moduleViewEnter {
+  0% {
+    opacity: 0.88;
+    transform: translateY(3px);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.module-view-transition {
+  animation: moduleViewEnter 140ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+  *, ::before, ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+    transform: none !important;
+  }
+  .module-view-transition {
+    animation: none !important;
+    transform: none !important;
+  }
+  .btn-interactive {
+    transform: none !important;
+  }
+}
+

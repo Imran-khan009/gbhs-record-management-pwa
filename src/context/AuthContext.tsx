@@ -1,14 +1,27 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { AuthSession } from '../types/auth';
-import { loadPersistedSession, loginOperator, logoutOperator, refreshSessionExpiry } from '../services/authService';
+import {
+  restoreSession,
+  signInUser,
+  signUpUser,
+  signOutUser,
+  subscribeToAuthStateChanges,
+  refreshSessionExpiry,
+} from '../services/authService';
 
 interface AuthContextType {
   session: AuthSession | null;
   isLoading: boolean;
-  login: (email: string, passcode: string) => Promise<{ success: boolean; error?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signUp: (
+    email: string,
+    password: string,
+    fullName?: string
+  ) => Promise<{ success: boolean; requiresConfirmation?: boolean; error?: string }>;
   logout: (forceClearQueue?: boolean) => Promise<void>;
   refreshSession: () => Promise<void>;
   isSessionExpired: boolean;
+  isOfflineSession: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -18,21 +31,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   useEffect(() => {
+    let unsubscribe: (() => void) | null = null;
+
     async function init() {
       try {
-        const loaded = await loadPersistedSession();
+        const loaded = await restoreSession();
         setSession(loaded);
+        unsubscribe = subscribeToAuthStateChanges((updatedSession) => {
+          setSession(updatedSession);
+        });
       } catch (e) {
         console.error('Failed to load persisted session', e);
       } finally {
         setIsLoading(false);
       }
     }
+
     init();
+
+    return () => {
+      if (unsubscribe) unsubscribe();
+    };
   }, []);
 
-  const login = async (email: string, passcode: string) => {
-    const res = await loginOperator(email, passcode);
+  const login = async (email: string, password: string) => {
+    const res = await signInUser(email, password);
     if (res.success && res.session) {
       setSession(res.session);
       return { success: true };
@@ -40,8 +63,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { success: false, error: res.error || 'Authentication failed' };
   };
 
+  const signUp = async (email: string, password: string, fullName?: string) => {
+    const res = await signUpUser(email, password, fullName);
+    if (res.success && res.session) {
+      setSession(res.session);
+      return { success: true, requiresConfirmation: false };
+    }
+    if (res.success && res.requiresConfirmation) {
+      return { success: true, requiresConfirmation: true };
+    }
+    return { success: false, error: res.error || 'Registration failed' };
+  };
+
   const logout = async (forceClearQueue: boolean = false) => {
-    await logoutOperator(forceClearQueue);
+    await signOutUser(forceClearQueue);
     setSession(null);
   };
 
@@ -53,6 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const isSessionExpired = Boolean(session && Date.now() > session.expiresAt);
+  const isOfflineSession = Boolean(session?.isTrustedOffline);
 
   return (
     <AuthContext.Provider
@@ -60,9 +96,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         session,
         isLoading,
         login,
+        signUp,
         logout,
         refreshSession,
         isSessionExpired,
+        isOfflineSession,
       }}
     >
       {children}

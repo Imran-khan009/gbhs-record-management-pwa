@@ -9,6 +9,7 @@ import {
   Download,
   Upload,
   Split,
+  Trash2,
 } from 'lucide-react';
 
 interface ConflictResolverModalProps {
@@ -44,6 +45,12 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
     onClose();
   };
 
+  const handleTrash = async () => {
+    await syncEngine.resolveConflict(conflict, 'discard');
+    onResolved();
+    onClose();
+  };
+
   const handleMerge = async () => {
     const merged = {
       ...conflict.remoteData,
@@ -60,16 +67,16 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-xs overflow-y-auto">
-      <div className="w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-6">
+      <div className="w-full max-w-2xl bg-[#202822] border border-[#3A473E] rounded-2xl shadow-2xl overflow-hidden my-6">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-850">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#3A473E] bg-[#2B352E]">
           <div className="flex items-center gap-2 text-amber-400">
-            <AlertTriangle className="w-5 h-5" />
+            <AlertTriangle className="w-5 h-5 text-[#D97745]" />
             <h3 className="text-base font-bold text-white">Resolve Data Conflict</h3>
           </div>
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
+            className="btn-interactive text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-[#202822] transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -84,8 +91,8 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
           {/* Side-by-side comparison */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Local Version */}
-            <div className="bg-slate-850 border border-sky-500/30 rounded-xl p-4">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800 text-sky-400 font-bold text-xs uppercase">
+            <div className="bg-[#2B352E] border border-[#D97745]/40 rounded-xl p-4">
+              <div className="flex items-center justify-between pb-2 border-b border-[#3A473E] text-[#D97745] font-bold text-xs uppercase tracking-wider">
                 <span className="flex items-center gap-1.5">
                   <Upload className="w-3.5 h-3.5" /> Local Changes (Device)
                 </span>
@@ -93,23 +100,23 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
               </div>
               <div className="mt-3 space-y-2 text-xs">
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Name / Label:</span>
+                  <span className="text-slate-400 block text-[10px]">Name / Label:</span>
                   <span className="font-semibold text-white">
                     {conflict.localData?.name || conflict.localData?.studentName || '—'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Status:</span>
-                  <span className="font-semibold text-sky-300">{conflict.localData?.status || '—'}</span>
+                  <span className="text-slate-400 block text-[10px]">Status:</span>
+                  <span className="font-semibold text-[#D97745]">{conflict.localData?.status || '—'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Class & Roll:</span>
+                  <span className="text-slate-400 block text-[10px]">Class & Roll:</span>
                   <span className="text-slate-300">
                     {conflict.localData?.class} Roll #{conflict.localData?.rollNo}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Last Modified:</span>
+                  <span className="text-slate-400 block text-[10px]">Last Modified:</span>
                   <span className="font-mono text-[11px] text-slate-400">
                     {conflict.localData?.updatedAt ? new Date(conflict.localData.updatedAt).toLocaleTimeString() : '—'}
                   </span>
@@ -118,8 +125,8 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
             </div>
 
             {/* Remote Version */}
-            <div className="bg-slate-850 border border-purple-500/30 rounded-xl p-4">
-              <div className="flex items-center justify-between pb-2 border-b border-slate-800 text-purple-400 font-bold text-xs uppercase">
+            <div className="bg-[#2B352E] border border-[#9BAE9C]/40 rounded-xl p-4">
+              <div className="flex items-center justify-between pb-2 border-b border-[#3A473E] text-[#9BAE9C] font-bold text-xs uppercase tracking-wider">
                 <span className="flex items-center gap-1.5">
                   <Download className="w-3.5 h-3.5" /> Remote Version (Cloud)
                 </span>
@@ -127,23 +134,23 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
               </div>
               <div className="mt-3 space-y-2 text-xs">
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Name / Label:</span>
+                  <span className="text-slate-400 block text-[10px]">Name / Label:</span>
                   <span className="font-semibold text-white">
                     {conflict.remoteData?.name || conflict.remoteData?.studentName || '—'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Status:</span>
-                  <span className="font-semibold text-purple-300">{conflict.remoteData?.status || '—'}</span>
+                  <span className="text-slate-400 block text-[10px]">Status:</span>
+                  <span className="font-semibold text-[#9BAE9C]">{conflict.remoteData?.status || '—'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Class & Roll:</span>
+                  <span className="text-slate-400 block text-[10px]">Class & Roll:</span>
                   <span className="text-slate-300">
                     {conflict.remoteData?.class} Roll #{conflict.remoteData?.rollNo}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px]">Last Modified:</span>
+                  <span className="text-slate-400 block text-[10px]">Last Modified:</span>
                   <span className="font-mono text-[11px] text-slate-400">
                     {conflict.remoteData?.updatedAt ? new Date(conflict.remoteData.updatedAt).toLocaleTimeString() : '—'}
                   </span>
@@ -154,9 +161,9 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
 
           {/* Merge option fields if user toggles */}
           {isMerging && (
-            <div className="bg-slate-850 border border-slate-700 rounded-xl p-4 space-y-3">
+            <div className="bg-[#2B352E] border border-[#3A473E] rounded-xl p-4 space-y-3">
               <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
-                <Split className="w-4 h-4 text-sky-400" />
+                <Split className="w-4 h-4 text-[#D97745]" />
                 <span>Customize Merged Values</span>
               </h4>
               <div>
@@ -165,49 +172,58 @@ export const ConflictResolverModal: React.FC<ConflictResolverModalProps> = ({
                   type="text"
                   value={mergeName}
                   onChange={(e) => setMergeName(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white"
+                  className="w-full bg-[#202822] border border-[#3A473E] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
             </div>
           )}
 
           {/* Decision Buttons */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5 pt-2">
             <button
               onClick={handleKeepLocal}
-              className="flex flex-col items-center justify-center p-3 rounded-xl bg-sky-950/60 border border-sky-800/80 hover:bg-sky-900/60 text-sky-200 transition cursor-pointer"
+              className="btn-interactive flex flex-col items-center justify-center p-2.5 rounded-xl bg-[#D97745]/15 border border-[#D97745]/40 hover:bg-[#D97745]/25 text-[#D97745] transition cursor-pointer"
             >
-              <Upload className="w-5 h-5 text-sky-400 mb-1" />
-              <span className="text-xs font-bold">Keep Local Version</span>
-              <span className="text-[10px] text-sky-400/80 mt-0.5">Overwrites Cloud</span>
+              <Upload className="w-4 h-4 text-[#D97745] mb-1 group-hover:scale-110 transition-transform" />
+              <span className="text-xs font-bold">Keep Local</span>
+              <span className="text-[9px] text-[#D97745]/80 mt-0.5">Overwrites Cloud</span>
             </button>
 
             <button
               onClick={handleKeepRemote}
-              className="flex flex-col items-center justify-center p-3 rounded-xl bg-purple-950/60 border border-purple-800/80 hover:bg-purple-900/60 text-purple-200 transition cursor-pointer"
+              className="btn-interactive flex flex-col items-center justify-center p-2.5 rounded-xl bg-[#9BAE9C]/15 border border-[#9BAE9C]/40 hover:bg-[#9BAE9C]/25 text-[#9BAE9C] transition cursor-pointer"
             >
-              <Download className="w-5 h-5 text-purple-400 mb-1" />
-              <span className="text-xs font-bold">Keep Remote Version</span>
-              <span className="text-[10px] text-purple-400/80 mt-0.5">Accept Cloud Value</span>
+              <Download className="w-4 h-4 text-[#9BAE9C] mb-1 group-hover:scale-110 transition-transform" />
+              <span className="text-xs font-bold">Keep Remote</span>
+              <span className="text-[9px] text-[#9BAE9C]/80 mt-0.5">Accept Cloud</span>
+            </button>
+
+            <button
+              onClick={handleTrash}
+              className="btn-interactive flex flex-col items-center justify-center p-2.5 rounded-xl bg-rose-950/40 border border-rose-800/60 hover:bg-rose-900/50 text-rose-300 transition cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4 text-rose-400 mb-1 group-hover:scale-110 transition-transform" />
+              <span className="text-xs font-bold">Trash / Ignore</span>
+              <span className="text-[9px] text-rose-400/80 mt-0.5">Discard Conflict</span>
             </button>
 
             {!isMerging ? (
               <button
                 onClick={() => setIsMerging(true)}
-                className="flex flex-col items-center justify-center p-3 rounded-xl bg-slate-800 border border-slate-700 hover:bg-slate-750 text-slate-200 transition cursor-pointer"
+                className="btn-interactive flex flex-col items-center justify-center p-2.5 rounded-xl bg-[#202822] border border-[#3A473E] hover:bg-[#2B352E] text-slate-200 transition cursor-pointer"
               >
-                <Split className="w-5 h-5 text-emerald-400 mb-1" />
-                <span className="text-xs font-bold">Merge Where Safe</span>
-                <span className="text-[10px] text-slate-400 mt-0.5">Customize Combined</span>
+                <Split className="w-4 h-4 text-[#9BAE9C] mb-1 group-hover:scale-110 transition-transform" />
+                <span className="text-xs font-bold">Merge</span>
+                <span className="text-[9px] text-slate-400 mt-0.5">Customize</span>
               </button>
             ) : (
               <button
                 onClick={handleMerge}
-                className="flex flex-col items-center justify-center p-3 rounded-xl bg-emerald-950/60 border border-emerald-800 hover:bg-emerald-900/60 text-emerald-200 transition cursor-pointer"
+                className="btn-interactive flex flex-col items-center justify-center p-2.5 rounded-xl bg-[#D97745] hover:bg-[#c26535] text-white transition shadow-sm cursor-pointer"
               >
-                <CheckCircle className="w-5 h-5 text-emerald-400 mb-1" />
-                <span className="text-xs font-bold">Confirm Merge</span>
-                <span className="text-[10px] text-emerald-400/80 mt-0.5">Save Combined</span>
+                <CheckCircle className="w-4 h-4 text-white mb-1 group-hover:scale-110 transition-transform" />
+                <span className="text-xs font-bold">Confirm</span>
+                <span className="text-[9px] text-white/80 mt-0.5">Save</span>
               </button>
             )}
           </div>

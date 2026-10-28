@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ClassLevel } from '../../types/student';
+import { ClassLevel, Student } from '../../types/student';
 import { TeachingLogEntry } from '../../types/modules';
 import {
   fetchTeachingLogs,
@@ -10,6 +10,8 @@ import {
 } from '../../services/modulesService';
 import { getAllStudents } from '../../services/db';
 import { useAuth } from '../../context/AuthContext';
+import { getWorkspacePermissions } from '../../services/permissionService';
+import { useSchoolProfile } from '../../services/schoolProfileService';
 import { ClassTabs, ClassFilter } from '../common/ClassTabs';
 import {
   BookOpen,
@@ -30,46 +32,56 @@ import {
   FileText,
   HelpCircle,
   Activity,
+  Download,
+  Upload,
 } from 'lucide-react';
+import { downloadTeachingLogTemplate } from '../../services/bulkModuleImportService';
+import { ModuleImportModal } from '../import/ModuleImportModal';
+import { DEFAULT_CLASSES, sanitizeClasses, sortClasses } from '../../services/schoolProfileService';
+import { getClassBadgeColor } from '../../services/classNormalizationService';
 
 export const TeachingLogView: React.FC = () => {
   const { session } = useAuth();
+  const permissions = getWorkspacePermissions(session?.user);
+  const { profile } = useSchoolProfile(session?.user?.workspaceOwnerId || session?.user?.id);
+
+  const availableClasses = sortClasses(sanitizeClasses(profile.classes));
+
   const [logs, setLogs] = useState<TeachingLogEntry[]>([]);
+  const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedClass, setSelectedClass] = useState<ClassFilter>('All');
   const [searchQuery, setSearchQuery] = useState('');
-  const [classCounts, setClassCounts] = useState<{ all: number; class7: number; class8: number; class9: number }>({
+  const [classCounts, setClassCounts] = useState<{ all: number; [key: string]: number }>({
     all: 0,
-    class7: 0,
-    class8: 0,
-    class9: 0,
   });
 
   // Modal states
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<TeachingLogEntry | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<TeachingLogEntry | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
 
   // Form Fields
   const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
   const [formDay, setFormDay] = useState(
     new Date().toLocaleDateString('en-US', { weekday: 'long' })
   );
-  const [formClass, setFormClass] = useState<ClassLevel>('Class 7');
+  const [formClass, setFormClass] = useState<ClassLevel>(() => availableClasses[0] || 'Class 1');
   const [formSubjectTopic, setFormSubjectTopic] = useState('');
   const [formLearningObjectives, setFormLearningObjectives] = useState('');
   const [formTheoryCovered, setFormTheoryCovered] = useState('');
   const [formPracticalActivity, setFormPracticalActivity] = useState('');
-  const [formTotalRegistered, setFormTotalRegistered] = useState(28);
-  const [formStudentsPresent, setFormStudentsPresent] = useState(26);
-  const [formStudentsCompletingTask, setFormStudentsCompletingTask] = useState(24);
-  const [formStudentsNeedingHelp, setFormStudentsNeedingHelp] = useState(2);
+  const [formTotalRegistered, setFormTotalRegistered] = useState(0);
+  const [formStudentsPresent, setFormStudentsPresent] = useState(0);
+  const [formStudentsCompletingTask, setFormStudentsCompletingTask] = useState(0);
+  const [formStudentsNeedingHelp, setFormStudentsNeedingHelp] = useState(0);
   const [formTeachingMethod, setFormTeachingMethod] = useState('Demonstration & Hands-on Lab');
   const [formIssueChallenge, setFormIssueChallenge] = useState('');
   const [formEvidenceFileName, setFormEvidenceFileName] = useState('');
   const [formNextLesson, setFormNextLesson] = useState('');
   const [formInstructorName, setFormInstructorName] = useState(
-    session?.user.fullName || 'Engr. Imran Tareen'
+    session?.user.fullName || session?.user.email || profile.principalName || 'Lead Instructor'
   );
   const [formError, setFormError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -77,16 +89,24 @@ export const TeachingLogView: React.FC = () => {
   const loadLogs = async () => {
     setIsLoading(true);
     try {
-      const data = await fetchTeachingLogs(selectedClass);
+      const [data, all, students] = await Promise.all([
+        fetchTeachingLogs(selectedClass),
+        fetchTeachingLogs('All'),
+        getAllStudents(),
+      ]);
       setLogs(data);
+      setAllStudents(students);
 
-      const all = await fetchTeachingLogs('All');
-      setClassCounts({
-        all: all.length,
-        class7: all.filter((l) => l.class === 'Class 7').length,
-        class8: all.filter((l) => l.class === 'Class 8').length,
-        class9: all.filter((l) => l.class === 'Class 9').length,
+      const dynamicCounts: Record<string, number> = { all: all.length };
+      availableClasses.forEach((cls) => {
+        const normCls = cls.trim().toLowerCase().replace(/\s+/g, ' ');
+        const count = all.filter((l) => (l.class || '').trim().toLowerCase().replace(/\s+/g, ' ') === normCls).length;
+        dynamicCounts[cls] = count;
+        const rawKey = cls.toLowerCase().replace(/[\s_-]+/g, '');
+        dynamicCounts[rawKey] = count;
       });
+
+      setClassCounts(dynamicCounts as any);
     } catch (err) {
       console.error('Failed to load teaching logs:', err);
     } finally {
@@ -96,6 +116,15 @@ export const TeachingLogView: React.FC = () => {
 
   useEffect(() => {
     loadLogs();
+    const handleReactivity = () => {
+      loadLogs();
+    };
+    window.addEventListener('gbhs_records_imported', handleReactivity);
+    window.addEventListener('gbhs_teaching_changed', handleReactivity);
+    return () => {
+      window.removeEventListener('gbhs_records_imported', handleReactivity);
+      window.removeEventListener('gbhs_teaching_changed', handleReactivity);
+    };
   }, [selectedClass]);
 
   const handleDateChange = (newDate: string) => {
@@ -108,24 +137,34 @@ export const TeachingLogView: React.FC = () => {
     }
   };
 
+  const handleClassChangeInForm = (cls: ClassLevel) => {
+    setFormClass(cls);
+    const classStudents = allStudents.filter(
+      (s) => s.class === cls && (s.status ? s.status === 'Active' : true)
+    );
+    const count = classStudents.length;
+    setFormTotalRegistered(count);
+    setFormStudentsPresent(count);
+    setFormStudentsCompletingTask(count);
+    setFormStudentsNeedingHelp(0);
+  };
+
   const handleOpenCreateModal = async () => {
+    if (permissions.isReadOnly) return;
     setEditingEntry(null);
     setFormDate(new Date().toISOString().split('T')[0]);
     setFormDay(new Date().toLocaleDateString('en-US', { weekday: 'long' }));
-    const defaultCls = selectedClass !== 'All' ? selectedClass : 'Class 7';
+    const defaultCls = selectedClass !== 'All' ? selectedClass : (availableClasses[0] || 'Class 1');
     setFormClass(defaultCls);
 
-    // Auto calculate enrolled count for that class from DB
-    try {
-      const students = await getAllStudents();
-      const count = students.filter((s) => s.class === defaultCls).length;
-      if (count > 0) {
-        setFormTotalRegistered(count);
-        setFormStudentsPresent(Math.max(1, count - 2));
-        setFormStudentsCompletingTask(Math.max(1, count - 4));
-        setFormStudentsNeedingHelp(2);
-      }
-    } catch (e) {}
+    const classStudents = allStudents.filter(
+      (s) => s.class === defaultCls && (s.status ? s.status === 'Active' : true)
+    );
+    const count = classStudents.length;
+    setFormTotalRegistered(count);
+    setFormStudentsPresent(count);
+    setFormStudentsCompletingTask(count);
+    setFormStudentsNeedingHelp(0);
 
     setFormSubjectTopic('');
     setFormLearningObjectives('');
@@ -135,12 +174,13 @@ export const TeachingLogView: React.FC = () => {
     setFormIssueChallenge('');
     setFormEvidenceFileName('');
     setFormNextLesson('');
-    setFormInstructorName(session?.user.fullName || 'Engr. Imran Tareen');
+    setFormInstructorName(session?.user.fullName || session?.user.email || profile.principalName || 'Lead Instructor');
     setFormError(null);
     setIsFormOpen(true);
   };
 
   const handleOpenEditModal = (entry: TeachingLogEntry) => {
+    if (permissions.isReadOnly) return;
     setEditingEntry(entry);
     setFormDate(entry.date);
     setFormDay(entry.day);
@@ -198,7 +238,7 @@ export const TeachingLogView: React.FC = () => {
           issueChallenge: formIssueChallenge.trim() || undefined,
           evidenceFileName: formEvidenceFileName.trim() || undefined,
           nextLesson: formNextLesson.trim() || undefined,
-          instructorName: formInstructorName.trim() || 'Engr. Imran Tareen',
+          instructorName: formInstructorName.trim() || session?.user.fullName || session?.user.email || 'Lead Instructor',
         });
         if (!res.success) throw new Error(res.error);
       } else {
@@ -218,7 +258,7 @@ export const TeachingLogView: React.FC = () => {
           issueChallenge: formIssueChallenge.trim() || undefined,
           evidenceFileName: formEvidenceFileName.trim() || undefined,
           nextLesson: formNextLesson.trim() || undefined,
-          instructorName: formInstructorName.trim() || 'Engr. Imran Tareen',
+          instructorName: formInstructorName.trim() || session?.user.fullName || session?.user.email || 'Lead Instructor',
         });
         if (!res.success) throw new Error(res.error);
       }
@@ -233,6 +273,7 @@ export const TeachingLogView: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (permissions.isReadOnly) return;
     if (window.confirm('Are you sure you want to delete this teaching log entry?')) {
       await deleteTeachingLog(id);
       await loadLogs();
@@ -275,68 +316,107 @@ export const TeachingLogView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-[#3D4A41]">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center shadow-inner">
+            <div className="w-9 h-9 rounded-xl bg-[#D97745]/15 border border-[#D97745]/30 text-[#D97745] flex items-center justify-center shadow-inner">
               <BookOpen className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+              <h1 className="text-xl font-bold text-[#F6F3EA] tracking-tight flex items-center gap-2">
                 <span>Teaching Log Module</span>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-sky-950 text-sky-400 border border-sky-800 font-mono font-medium">
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#D97745]/20 text-[#E48B5D] border border-[#D97745]/40 font-mono font-medium">
                   Official Record
                 </span>
               </h1>
-              <p className="text-xs text-slate-400 mt-0.5">
+              <p className="text-xs text-[#9BAE9C] mt-0.5">
                 Record daily lectures, covered theory, practical activities, and student metrics across classes
               </p>
             </div>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 flex-wrap">
           <button
-            onClick={() => exportTeachingLogsToExcel(filteredLogs, selectedClass)}
-            disabled={filteredLogs.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700/80 transition cursor-pointer disabled:opacity-40"
+            type="button"
+            onClick={() => downloadTeachingLogTemplate({ classLevel: selectedClass })}
+            className="btn-interactive group flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#3D4A41] hover:border-[#D97745]/60 cursor-pointer"
+            title="Download Teaching Log Excel/CSV Template"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-            <span>Export Sheet</span>
+            <Download className="w-3.5 h-3.5 text-[#D97745] transition-transform duration-200 group-hover:scale-110" />
+            <span>Template</span>
           </button>
 
-          <button
-            onClick={handleOpenCreateModal}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white shadow-md shadow-sky-950/50 transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Lecture Log</span>
-          </button>
+          {permissions.canImport && (
+            <button
+              type="button"
+              onClick={() => setIsImportModalOpen(true)}
+              className="btn-interactive group flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-emerald-950/80 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-800/80 cursor-pointer"
+              title="Bulk Import Teaching Logs from Excel or CSV"
+            >
+              <Upload className="w-3.5 h-3.5 text-emerald-400 transition-transform duration-200 group-hover:scale-110" />
+              <span>Bulk Import</span>
+            </button>
+          )}
+
+          {permissions.canExport && (
+            <button
+              type="button"
+              onClick={() => exportTeachingLogsToExcel(filteredLogs, selectedClass)}
+              disabled={filteredLogs.length === 0}
+              className="btn-interactive group flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#3D4A41] hover:border-emerald-500/60 cursor-pointer disabled:opacity-40"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-400 transition-transform duration-200 group-hover:scale-110" />
+              <span>Export Sheet</span>
+            </button>
+          )}
+
+          {permissions.canAdd && (
+            <button
+              type="button"
+              onClick={handleOpenCreateModal}
+              className="btn-interactive group flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#D97745] hover:bg-[#C56837] active:bg-[#B35B2B] text-white shadow-xs cursor-pointer"
+            >
+              <Plus className="w-4 h-4 transition-transform duration-200 group-hover:rotate-90" />
+              <span>Add Lecture Log</span>
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Read-Only Access Banner */}
+      {permissions.isReadOnly && (
+        <div className="p-3.5 rounded-xl border border-amber-800/80 bg-amber-950/40 text-xs text-amber-300 flex items-center gap-2.5">
+          <span>
+            <strong>Approved Staff Access (Read & Export):</strong> You are viewing teaching logs in this shared workspace with read and export permissions. Creating, editing, or deleting lectures can only be performed by the Workspace Owner.
+          </span>
+        </div>
+      )}
+
       {/* Class Switching Tabs */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-[#2B352E]/60 p-2.5 rounded-2xl border border-[#3D4A41]">
         <ClassTabs
           selectedClass={selectedClass}
           onSelectClass={setSelectedClass}
+          classes={availableClasses}
           counts={classCounts}
         />
 
         {/* Search */}
         <div className="relative w-full sm:w-72">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="w-3.5 h-3.5 text-[#9BAE9C] absolute left-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search topic, activity, instructor..."
-            className="w-full bg-slate-850 border border-slate-700/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
+            className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl pl-8 pr-3 py-1.5 text-xs text-[#F6F3EA] placeholder-[#9BAE9C]/60 focus:outline-none focus:border-[#D97745]"
           />
           {searchQuery && (
             <button
+              type="button"
               onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
+              className="btn-interactive absolute right-2.5 top-1/2 -translate-y-1/2 text-[#9BAE9C] hover:text-[#F6F3EA]"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -346,50 +426,50 @@ export const TeachingLogView: React.FC = () => {
 
       {/* KPI Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Lectures Recorded</span>
-            <BookOpen className="w-4 h-4 text-sky-400" />
+            <BookOpen className="w-4 h-4 text-[#D97745]" />
           </div>
-          <p className="text-2xl font-bold text-white mt-2">{totalLectures}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">
-            {selectedClass === 'All' ? 'Across all 3 classes' : `For ${selectedClass}`}
+          <p className="text-2xl font-bold text-[#F6F3EA] mt-2">{totalLectures}</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">
+            {selectedClass === 'All' ? 'Across all classes' : `For ${selectedClass}`}
           </p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Avg Attendance Rate</span>
             <Users className="w-4 h-4 text-emerald-400" />
           </div>
           <p className="text-2xl font-bold text-emerald-400 mt-2">{avgAttendance}%</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Learners present in class</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Learners present in class</p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Task Completion</span>
-            <CheckCircle2 className="w-4 h-4 text-indigo-400" />
+            <CheckCircle2 className="w-4 h-4 text-[#D97745]" />
           </div>
-          <p className="text-2xl font-bold text-indigo-400 mt-2">{avgCompletion}%</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Hands-on practical output</p>
+          <p className="text-2xl font-bold text-[#D97745] mt-2">{avgCompletion}%</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Hands-on practical output</p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Needed Remedial Help</span>
             <AlertTriangle className="w-4 h-4 text-amber-400" />
           </div>
           <p className="text-2xl font-bold text-amber-400 mt-2">{totalNeedHelp}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Student support instances</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Student support instances</p>
         </div>
       </div>
 
       {/* Main Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+      <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-850/80 text-slate-400 uppercase text-[10px] font-semibold tracking-wider border-b border-slate-800">
+          <table className="w-full text-left text-xs text-[#CCD6CD]">
+            <thead className="bg-[#202822] text-[#9BAE9C] uppercase text-[10px] font-semibold tracking-wider border-b border-[#3D4A41]">
               <tr>
                 <th className="px-4 py-3.5">Date & Day</th>
                 <th className="px-4 py-3.5">Class</th>
@@ -403,17 +483,23 @@ export const TeachingLogView: React.FC = () => {
                 <th className="px-4 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/80">
+            <tbody className="divide-y divide-[#3D4A41]/70">
               {isLoading ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={10} className="px-4 py-12 text-center text-[#9BAE9C]">
                     Loading teaching log entries...
                   </td>
                 </tr>
               ) : filteredLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-12 text-center text-slate-500">
-                    No teaching logs found for this filter. Click "Add Lecture Log" to record a session.
+                  <td colSpan={10} className="px-4 py-16 text-center text-[#9BAE9C]">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <BookOpen className="w-9 h-9 text-[#9BAE9C] mb-1" />
+                      <p className="text-[#F6F3EA] font-semibold text-sm">No teaching logs recorded yet</p>
+                      <p className="text-xs text-[#9BAE9C] max-w-md">
+                        This module is clean and empty. Real classroom lecture logs will automatically calculate student enrollment numbers directly from your imported Student Master Roster.
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : (
@@ -423,36 +509,30 @@ export const TeachingLogView: React.FC = () => {
                     : 0;
 
                   return (
-                    <tr key={log.id} className="hover:bg-slate-850/50 transition-colors">
+                    <tr key={log.id} className="hover:bg-[#344038]/50 transition-colors duration-150">
                       <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px]">
-                        <div className="font-semibold text-white">{log.date}</div>
-                        <div className="text-[10px] text-slate-500">{log.day}</div>
+                        <div className="font-semibold text-[#F6F3EA]">{log.date}</div>
+                        <div className="text-[10px] text-[#9BAE9C]">{log.day}</div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <span
-                          className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                            log.class === 'Class 7'
-                              ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
-                              : log.class === 'Class 8'
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                              : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30'
-                          }`}
+                          className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${getClassBadgeColor(log.class)}`}
                         >
                           {log.class}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-medium text-white max-w-[200px] truncate" title={log.subjectTopic}>
+                      <td className="px-4 py-3 font-medium text-[#F6F3EA] max-w-[200px] truncate" title={log.subjectTopic}>
                         {log.subjectTopic}
                       </td>
-                      <td className="px-4 py-3 text-slate-400 max-w-[180px] truncate" title={log.theoryCovered}>
+                      <td className="px-4 py-3 text-[#9BAE9C] max-w-[180px] truncate" title={log.theoryCovered}>
                         {log.theoryCovered}
                       </td>
-                      <td className="px-4 py-3 text-slate-400 max-w-[180px] truncate" title={log.practicalActivity}>
+                      <td className="px-4 py-3 text-[#9BAE9C] max-w-[180px] truncate" title={log.practicalActivity}>
                         {log.practicalActivity}
                       </td>
                       <td className="px-4 py-3 text-center whitespace-nowrap font-mono">
                         <span className="font-bold text-emerald-400">{log.studentsPresent}</span>
-                        <span className="text-slate-500"> / {log.totalRegistered}</span>
+                        <span className="text-[#9BAE9C]"> / {log.totalRegistered}</span>
                       </td>
                       <td className="px-4 py-3 text-center whitespace-nowrap font-mono">
                         <span
@@ -465,33 +545,40 @@ export const TeachingLogView: React.FC = () => {
                           {completionRate}% ({log.studentsCompletingTask})
                         </span>
                       </td>
-                      <td className="px-4 py-3 text-slate-300 whitespace-nowrap text-[11px]">
+                      <td className="px-4 py-3 text-[#CCD6CD] whitespace-nowrap text-[11px]">
                         {log.teachingMethod}
                       </td>
-                      <td className="px-4 py-3 text-slate-400 whitespace-nowrap">{log.instructorName}</td>
+                      <td className="px-4 py-3 text-[#9BAE9C] whitespace-nowrap">{log.instructorName}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
+                            type="button"
                             onClick={() => setSelectedDetail(log)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition"
+                            className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-[#D97745] hover:bg-[#202822] cursor-pointer"
                             title="View Full Details"
                           >
                             <FileText className="w-3.5 h-3.5" />
                           </button>
-                          <button
-                            onClick={() => handleOpenEditModal(log)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition"
-                            title="Edit Log"
-                          >
-                            <Edit className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => handleDelete(log.id)}
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition"
-                            title="Delete"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          {permissions.canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditModal(log)}
+                              className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-emerald-400 hover:bg-[#202822] cursor-pointer"
+                              title="Edit Log"
+                            >
+                              <Edit className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {permissions.canDelete && (
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(log.id)}
+                              className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-rose-400 hover:bg-[#202822] cursor-pointer"
+                              title="Delete"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -505,18 +592,19 @@ export const TeachingLogView: React.FC = () => {
 
       {/* Add / Edit Log Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col animate-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-[#3D4A41] flex items-center justify-between sticky top-0 bg-[#2B352E] z-10">
               <div className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-sky-400" />
-                <h3 className="font-bold text-white text-sm">
+                <BookOpen className="w-5 h-5 text-[#D97745]" />
+                <h3 className="font-bold text-[#F6F3EA] text-sm">
                   {editingEntry ? 'Edit Teaching Log Entry' : 'Record New Lecture / Lab Session'}
                 </h3>
               </div>
               <button
+                type="button"
                 onClick={() => setIsFormOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="btn-interactive text-[#9BAE9C] hover:text-[#F6F3EA] p-1 rounded-lg hover:bg-[#202822] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -537,7 +625,7 @@ export const TeachingLogView: React.FC = () => {
                     required
                     value={formDate}
                     onChange={(e) => handleDateChange(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
@@ -547,22 +635,33 @@ export const TeachingLogView: React.FC = () => {
                     required
                     value={formDay}
                     onChange={(e) => setFormDay(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
                   <label className="block text-slate-400 text-xs font-medium mb-1">Class</label>
                   <select
                     value={formClass}
-                    onChange={(e) => setFormClass(e.target.value as ClassLevel)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    onChange={(e) => handleClassChangeInForm(e.target.value as ClassLevel)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   >
-                    <option value="Class 7">Class 7th</option>
-                    <option value="Class 8">Class 8th</option>
-                    <option value="Class 9">Class 9th</option>
+                    {availableClasses.map((cls) => (
+                      <option key={cls} value={cls}>
+                        {cls}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
+
+              {formTotalRegistered === 0 && (
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs flex items-center gap-2.5">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>
+                    No active students registered in <strong>{formClass}</strong> in the Student Master Roster. Import roster excel sheet first or adjust student count manually.
+                  </span>
+                </div>
+              )}
 
               <div>
                 <label className="block text-slate-400 text-xs font-medium mb-1">Subject / Topic</label>
@@ -572,7 +671,7 @@ export const TeachingLogView: React.FC = () => {
                   placeholder="e.g. Computer Hardware & Peripheral Devices"
                   value={formSubjectTopic}
                   onChange={(e) => setFormSubjectTopic(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
@@ -583,7 +682,7 @@ export const TeachingLogView: React.FC = () => {
                   placeholder="Specific learning goals for this lecture session..."
                   value={formLearningObjectives}
                   onChange={(e) => setFormLearningObjectives(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
@@ -596,7 +695,7 @@ export const TeachingLogView: React.FC = () => {
                     placeholder="Theoretical concepts, definitions, explanations..."
                     value={formTheoryCovered}
                     onChange={(e) => setFormTheoryCovered(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
@@ -607,7 +706,7 @@ export const TeachingLogView: React.FC = () => {
                     placeholder="Hands-on lab exercises and student tasks..."
                     value={formPracticalActivity}
                     onChange={(e) => setFormPracticalActivity(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
               </div>
@@ -618,7 +717,7 @@ export const TeachingLogView: React.FC = () => {
                   <label className="block text-[11px] text-slate-400 mb-1">Total Registered</label>
                   <input
                     type="number"
-                    min="1"
+                    min="0"
                     value={formTotalRegistered}
                     onChange={(e) => setFormTotalRegistered(Number(e.target.value))}
                     className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white font-mono"
@@ -662,7 +761,7 @@ export const TeachingLogView: React.FC = () => {
                   <select
                     value={formTeachingMethod}
                     onChange={(e) => setFormTeachingMethod(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="Demonstration & Hands-on Lab">Demonstration & Hands-on Lab</option>
                     <option value="Interactive Lecture">Interactive Lecture</option>
@@ -678,7 +777,7 @@ export const TeachingLogView: React.FC = () => {
                     required
                     value={formInstructorName}
                     onChange={(e) => setFormInstructorName(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
               </div>
@@ -691,7 +790,7 @@ export const TeachingLogView: React.FC = () => {
                     placeholder="Power, hardware, software issues..."
                     value={formIssueChallenge}
                     onChange={(e) => setFormIssueChallenge(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
@@ -701,7 +800,7 @@ export const TeachingLogView: React.FC = () => {
                     placeholder="e.g. lab_session_photo_01.jpg"
                     value={formEvidenceFileName}
                     onChange={(e) => setFormEvidenceFileName(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
@@ -711,23 +810,23 @@ export const TeachingLogView: React.FC = () => {
                     placeholder="Topic for upcoming lecture..."
                     value={formNextLesson}
                     onChange={(e) => setFormNextLesson(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-sky-500"
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-[#3D4A41]">
                 <button
                   type="button"
                   onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                  className="btn-interactive px-4 py-2 rounded-xl text-xs font-semibold text-[#9BAE9C] hover:text-[#F6F3EA] hover:bg-[#202822] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-md disabled:opacity-40"
+                  className="btn-interactive px-5 py-2 rounded-xl text-xs font-semibold bg-[#D97745] hover:bg-[#C56837] active:bg-[#B35B2B] text-white shadow-xs disabled:opacity-40 cursor-pointer"
                 >
                   {isSubmitting ? 'Saving...' : editingEntry ? 'Update Entry' : 'Save Teaching Log'}
                 </button>
@@ -739,80 +838,82 @@ export const TeachingLogView: React.FC = () => {
 
       {/* Details Modal */}
       {selectedDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#3D4A41]">
               <div className="flex items-center gap-2">
-                <BookOpen className="w-5 h-5 text-sky-400" />
-                <h3 className="font-bold text-white text-sm">Lecture Log Details</h3>
+                <BookOpen className="w-5 h-5 text-[#D97745]" />
+                <h3 className="font-bold text-[#F6F3EA] text-sm">Lecture Log Details</h3>
               </div>
               <button
+                type="button"
                 onClick={() => setSelectedDetail(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="btn-interactive text-[#9BAE9C] hover:text-[#F6F3EA] p-1 rounded-lg hover:bg-[#202822] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
-              <div className="flex justify-between items-center bg-slate-850 p-2.5 rounded-xl border border-slate-800">
-                <span className="text-slate-400">Date & Class:</span>
-                <span className="font-semibold text-white">
-                  {selectedDetail.date} ({selectedDetail.day}) — <strong className="text-sky-400">{selectedDetail.class}</strong>
+              <div className="flex justify-between items-center bg-[#202822] p-2.5 rounded-xl border border-[#3D4A41]">
+                <span className="text-[#9BAE9C]">Date & Class:</span>
+                <span className="font-semibold text-[#F6F3EA]">
+                  {selectedDetail.date} ({selectedDetail.day}) — <strong className="text-[#D97745]">{selectedDetail.class}</strong>
                 </span>
               </div>
               <div>
-                <span className="text-slate-400 block font-medium">Topic:</span>
-                <p className="text-white font-semibold mt-0.5">{selectedDetail.subjectTopic}</p>
+                <span className="text-[#9BAE9C] block font-medium">Topic:</span>
+                <p className="text-[#F6F3EA] font-semibold mt-0.5">{selectedDetail.subjectTopic}</p>
               </div>
               {selectedDetail.learningObjectives && (
                 <div>
-                  <span className="text-slate-400 block font-medium">Learning Objectives:</span>
-                  <p className="text-slate-200 mt-0.5">{selectedDetail.learningObjectives}</p>
+                  <span className="text-[#9BAE9C] block font-medium">Learning Objectives:</span>
+                  <p className="text-[#CCD6CD] mt-0.5">{selectedDetail.learningObjectives}</p>
                 </div>
               )}
               <div>
-                <span className="text-slate-400 block font-medium">Theory Covered:</span>
-                <p className="text-slate-200 mt-0.5">{selectedDetail.theoryCovered}</p>
+                <span className="text-[#9BAE9C] block font-medium">Theory Covered:</span>
+                <p className="text-[#CCD6CD] mt-0.5">{selectedDetail.theoryCovered}</p>
               </div>
               <div>
-                <span className="text-slate-400 block font-medium">Practical Activity:</span>
-                <p className="text-slate-200 mt-0.5">{selectedDetail.practicalActivity}</p>
+                <span className="text-[#9BAE9C] block font-medium">Practical Activity:</span>
+                <p className="text-[#CCD6CD] mt-0.5">{selectedDetail.practicalActivity}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 bg-slate-850 p-3 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-2 gap-2 bg-[#202822] p-3 rounded-xl border border-[#3D4A41]">
                 <div>
-                  <span className="text-slate-400 text-[11px]">Attendance:</span>
-                  <p className="font-bold text-white text-sm">
+                  <span className="text-[#9BAE9C] text-[11px]">Attendance:</span>
+                  <p className="font-bold text-[#F6F3EA] text-sm">
                     {selectedDetail.studentsPresent} / {selectedDetail.totalRegistered}
                   </p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Tasks Completed:</span>
+                  <span className="text-[#9BAE9C] text-[11px]">Tasks Completed:</span>
                   <p className="font-bold text-emerald-400 text-sm">{selectedDetail.studentsCompletingTask}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Needed Support:</span>
+                  <span className="text-[#9BAE9C] text-[11px]">Needed Support:</span>
                   <p className="font-bold text-amber-400 text-sm">{selectedDetail.studentsNeedingHelp}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Instructor:</span>
-                  <p className="font-bold text-white text-sm">{selectedDetail.instructorName}</p>
+                  <span className="text-[#9BAE9C] text-[11px]">Instructor:</span>
+                  <p className="font-bold text-[#F6F3EA] text-sm">{selectedDetail.instructorName}</p>
                 </div>
               </div>
 
               {selectedDetail.nextLesson && (
                 <div>
-                  <span className="text-slate-400 block font-medium">Next Lesson:</span>
-                  <p className="text-sky-300 mt-0.5 font-medium">{selectedDetail.nextLesson}</p>
+                  <span className="text-[#9BAE9C] block font-medium">Next Lesson:</span>
+                  <p className="text-[#D97745] mt-0.5 font-medium">{selectedDetail.nextLesson}</p>
                 </div>
               )}
             </div>
 
             <div className="pt-2 flex justify-end">
               <button
+                type="button"
                 onClick={() => setSelectedDetail(null)}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
+                className="btn-interactive px-4 py-1.5 rounded-xl text-xs font-semibold bg-[#202822] text-[#F6F3EA] hover:bg-[#344038] border border-[#3D4A41] cursor-pointer"
               >
                 Close
               </button>
@@ -820,6 +921,14 @@ export const TeachingLogView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Module Bulk Importer Modal */}
+      <ModuleImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        initialModuleType="teaching_log"
+        onImportComplete={loadLogs}
+      />
     </div>
   );
 };

@@ -1,7 +1,8 @@
 import * as XLSX from 'xlsx';
-import { ClassLevel, Section, Student, StudentImportRow, StudentStatus } from '../types/student';
+import { ClassLevel, Section, Student, StudentImportRow, StudentStatus, AttendanceRecord } from '../types/student';
 import {
   getAllStudents,
+  getAllAttendanceRecords,
   getStudentById,
   findStudentByAdmissionNo,
   bulkSaveStudentsLocally,
@@ -11,6 +12,11 @@ import {
 } from './db';
 import { OutboxOperation } from '../types/sync';
 import { syncEngine } from './syncEngine';
+import { getWorkspacePermissions } from './permissionService';
+import { getSchoolProfile } from './schoolProfileService';
+import { normalizeClass, CANONICAL_CLASSES, isCanonicalClass } from './classNormalizationService';
+
+export { normalizeClass, CANONICAL_CLASSES, isCanonicalClass };
 
 const DEFAULT_SCHOOL_ID = 'GBHS-MAIN';
 
@@ -73,7 +79,7 @@ export interface CanonicalFieldDef {
 export const CANONICAL_STUDENT_FIELDS: CanonicalFieldDef[] = [
   { key: 'name', label: 'Student Name (Name of Learner)', required: true, description: 'Learner full name' },
   { key: 'fatherName', label: "Father's Name (Walid)", required: false, description: "Father's name" },
-  { key: 'class', label: 'Class / Grade', required: false, description: 'Class level (Class 7, 8, or 9)' },
+  { key: 'class', label: 'Class / Grade', required: false, description: 'Class level (Class 1 to 10)' },
   { key: 'rollNo', label: 'Roll Number (Roll Num)', required: false, description: 'Class roll number' },
   { key: 'admissionNo', label: 'Admission / Reg / GR No', required: false, description: 'Official admission or register ID' },
   { key: 'section', label: 'Section (A, B, C)', required: false, description: 'Class section' },
@@ -353,50 +359,10 @@ export function cleanStr(s: any): string {
     .replace(/[^\p{L}\p{N}]/gu, '');
 }
 
-/**
- * Normalizes class strings from user spreadsheets into canonical ClassLevel.
- * Supports: '7', '7th', 'Class 7', 'Class 7th', 'Grade 7', 'VII', '7-A', '7A', 'Class-7', 'Seventh', etc.
- */
-export function normalizeClass(raw: any): ClassLevel | null {
-  if (!raw) return null;
-  const str = String(raw).trim().toLowerCase();
 
-  // Test suite requirement: Grade 12 or senior higher secondary grades are rejected
-  if (
-    str.includes('12') ||
-    str.includes('xii') ||
-    str.includes('11') ||
-    str.includes('xi')
-  ) {
-    return null;
-  }
-
-  // Exact standard strings
-  if (str === '7' || str === 'class 7' || str === 'grade 7' || str === 'vii') return 'Class 7';
-  if (str === '8' || str === 'class 8' || str === 'grade 8' || str === 'viii') return 'Class 8';
-  if (str === '9' || str === 'class 9' || str === 'grade 9' || str === 'ix') return 'Class 9';
-
-  // Flexible patterns supporting 7A, 7-A, 7th, Class 7th, Seventh, VII, etc.
-  if (/(?:^|\b|\D)(?:7|7th|vii|seventh)(?:[a-z\s-_]|$)/i.test(str)) {
-    if (!/\b(?:17|27)\b/.test(str)) return 'Class 7';
-  }
-  if (/(?:^|\b|\D)(?:8|8th|viii|eighth)(?:[a-z\s-_]|$)/i.test(str)) {
-    if (!/\b(?:18|28)\b/.test(str)) return 'Class 8';
-  }
-  if (/(?:^|\b|\D)(?:9|9th|ix|ninth)(?:[a-z\s-_]|$)/i.test(str)) {
-    if (!/\b(?:19|29)\b/.test(str)) return 'Class 9';
-  }
-
-  // Urdu representations
-  if (str.includes('۷') || str.includes('ساتویں') || str.includes('ہفتم')) return 'Class 7';
-  if (str.includes('۸') || str.includes('آٹھویں') || str.includes('ہشتم')) return 'Class 8';
-  if (str.includes('۹') || str.includes('نویں') || str.includes('نہم')) return 'Class 9';
-
-  return null;
-}
 
 /**
- * Normalizes section from cell value or extracts from combined class-section strings (e.g. "8-B", "7A")
+ * Normalizes section from cell value or extracts from combined class-section strings (e.g. "8-B", "7A", "10-B")
  */
 export function normalizeSection(raw: any, fallbackClassStr?: any): Section {
   if (raw) {
@@ -407,9 +373,9 @@ export function normalizeSection(raw: any, fallbackClassStr?: any): Section {
     if (str.includes('C') || str === 'SEC C' || str === 'SEC-C' || str === 'SECTION C') return 'C';
   }
 
-  // Fallback: extract section letter from class cell if present (e.g. "7-A", "8 B", "9th C", "7A")
+  // Fallback: extract section letter from class cell if present (e.g. "7-A", "8 B", "9th C", "7A", "10-B", "1-A")
   if (fallbackClassStr) {
-    const match = String(fallbackClassStr).match(/(?:class|grade)?\s*[789](?:th)?\s*[-_\s/:]*([A-Za-z])/i);
+    const match = String(fallbackClassStr).match(/(?:class|grade)?\s*(?:10|[1-9])(?:th)?\s*[-_\s/:]*([A-Za-z])/i);
     if (match) {
       const sec = match[1].toUpperCase();
       if (sec === 'A' || sec === 'B' || sec === 'C') return sec as Section;
@@ -973,11 +939,12 @@ export async function parseExcelOrCsvFile(
 
       // Extract Class
       const rawClass = getVal('class');
+      const defaultCls = options.defaultClass ? normalizeClass(options.defaultClass) : null;
       const classLevel =
         normalizeClass(rawClass) ||
         normalizeClass(sName) ||
         normalizeClass(file.name) ||
-        options.defaultClass ||
+        defaultCls ||
         null;
 
       // Extract Section
@@ -1034,12 +1001,19 @@ export async function parseExcelOrCsvFile(
       const gender: 'Male' | 'Female' | 'Other' =
         rawGender === 'female' || rawGender === 'f' || rawGender === 'girl' ? 'Female' : 'Male';
 
-      const rawStatus = getVal('registeredStatus');
-      const registeredStatus: 'Registerd' | 'Unregisterd' =
-        rawStatus.toLowerCase().includes('unreg') || rawStatus.toLowerCase().includes('inact')
-          ? 'Unregisterd'
-          : 'Registerd';
-      const status: StudentStatus = registeredStatus === 'Unregisterd' ? 'Inactive' : 'Active';
+      const rawStatus = getVal('registeredStatus').toLowerCase();
+      let status: StudentStatus = 'Active';
+      let registeredStatus = 'Registerd';
+      if (rawStatus.includes('withdr') || rawStatus.includes('drop') || rawStatus.includes('left')) {
+        status = 'Withdrawn';
+        registeredStatus = 'Withdrawn';
+      } else if (rawStatus.includes('transf')) {
+        status = 'Transferred';
+        registeredStatus = 'Transferred';
+      } else if (rawStatus.includes('unreg') || rawStatus.includes('inact')) {
+        status = 'Inactive';
+        registeredStatus = 'Unregisterd';
+      }
 
       const bFormNo = getVal('bFormNo') || undefined;
       const fatherCnic = getVal('fatherCnic') || undefined;
@@ -1052,7 +1026,7 @@ export async function parseExcelOrCsvFile(
         validationErrors.push('Student Name is required.');
       }
       if (!classLevel) {
-        validationErrors.push(`Invalid or unmapped class "${rawClass || 'None'}". GBHS requires Class 7, 8, or 9.`);
+        validationErrors.push(`Invalid or missing class "${rawClass || 'None'}". GBHS requires Class 1 to 10.`);
       }
 
       // Safe Merge & Scoped Duplicate Detection
@@ -1175,7 +1149,7 @@ export async function parseExcelOrCsvFile(
         fatherName: rawFather || '-',
         gender,
         dob: dob || undefined,
-        class: classLevel || ('Class 7' as ClassLevel),
+        class: (classLevel || (rawClass ? String(rawClass).trim() : '')) as ClassLevel,
         dateOfCenterBeginning: dateOfCenterBeginning || undefined,
         guardianContact,
         registeredStatus,
@@ -1236,6 +1210,14 @@ export async function commitApprovedImportRows(
   userEmail: string,
   options: CommitImportOptions = { updateExisting: true, replaceAll: false }
 ): Promise<CommitImportResult> {
+  const sessionUser = syncEngine.getSession()?.user;
+  if (sessionUser) {
+    const permissions = getWorkspacePermissions(sessionUser);
+    if (permissions.isReadOnly) {
+      throw new Error('Permission denied: Read-only team members cannot import data.');
+    }
+  }
+
   const toCommit = rows.filter((r) => r.selected && r.validationErrors.length === 0);
 
   if (toCommit.length === 0) {
@@ -1323,7 +1305,7 @@ export async function commitApprovedImportRows(
         section: row.section || current?.section || 'A',
         phone: row.guardianContact || row.phone || current?.phone || '',
         address: row.address || current?.address,
-        status: (row.registeredStatus || current?.registeredStatus) === 'Unregisterd' ? 'Inactive' : (row.status || current?.status || 'Active'),
+        status: row.status || (row.registeredStatus === 'Unregisterd' ? 'Inactive' : (current?.status || 'Active')),
 
         admissionDate: row.dateOfCenterBeginning || row.admissionDate || current?.admissionDate,
         bFormNo: row.bFormNo || current?.bFormNo,
@@ -1572,6 +1554,11 @@ export function exportStudentsToExcel(
   }
 ): { success: boolean; filename?: string; count?: number; error?: string } {
   try {
+    const permissions = getWorkspacePermissions(syncEngine.getSession()?.user);
+    if (!permissions.canExport) {
+      return { success: false, error: 'Permission denied: User is not permitted to export student records.' };
+    }
+
     if (students.length === 0) {
       return { success: false, error: 'No student records to export.' };
     }
@@ -1630,18 +1617,22 @@ export function exportStudentsToExcel(
       { wch: 24 },
     ];
 
+    const profile = getSchoolProfile();
+    const schoolPrefix = (profile.schoolShortName && profile.schoolShortName !== 'GBHS Jam Yousuf Colony')
+      ? profile.schoolShortName.replace(/[^a-zA-Z0-9]/g, '_')
+      : 'GBHS';
     const dateStr = new Date().toISOString().split('T')[0];
     let filename: string;
 
     if (filters?.selectedClass && filters.selectedClass !== 'All') {
       const clsStr = filters.selectedClass.replace(/\s+/g, '_');
       if (filters.selectedSection && filters.selectedSection !== 'All') {
-        filename = `GBHS_${clsStr}_Sec_${filters.selectedSection}_Students_${dateStr}.xlsx`;
+        filename = `${schoolPrefix}_${clsStr}_Sec_${filters.selectedSection}_Students_${dateStr}.xlsx`;
       } else {
-        filename = `GBHS_${clsStr}_Students_${dateStr}.xlsx`;
+        filename = `${schoolPrefix}_${clsStr}_Students_${dateStr}.xlsx`;
       }
     } else {
-      filename = `GBHS_All_Classes_Students_${dateStr}.xlsx`;
+      filename = `${schoolPrefix}_All_Classes_Students_${dateStr}.xlsx`;
     }
 
     XLSX.writeFile(workbook, filename);
@@ -1651,3 +1642,348 @@ export function exportStudentsToExcel(
     return { success: false, error: err.message || 'Export to Excel failed.' };
   }
 }
+
+// -------------------------------------------------------------
+// ATTENDANCE MATRIX & REGISTER EXPORT SERVICE
+// -------------------------------------------------------------
+
+export interface AttendanceExportOptions {
+  selectedClass?: ClassLevel | 'All';
+  selectedSection?: Section | 'All';
+  date?: string; // Single date (YYYY-MM-DD)
+  startDate?: string; // Start date of range (YYYY-MM-DD)
+  endDate?: string; // End date of range (YYYY-MM-DD)
+  format?: 'xlsx' | 'csv';
+}
+
+export interface AttendanceExportResult {
+  success: boolean;
+  filename?: string;
+  count?: number;
+  error?: string;
+  matrixRows?: Record<string, any>[];
+  registerRows?: Record<string, any>[];
+  workbook?: XLSX.WorkBook;
+}
+
+export async function exportAttendanceToExcel(
+  options: AttendanceExportOptions = {}
+): Promise<AttendanceExportResult> {
+  try {
+    const session = syncEngine.getSession();
+    const permissions = getWorkspacePermissions(session?.user);
+    if (!permissions.canExport) {
+      return { success: false, error: 'Permission denied: User is not permitted to export attendance records.' };
+    }
+
+    const {
+      selectedClass = 'All',
+      selectedSection = 'All',
+      date,
+      startDate,
+      endDate,
+      format = 'xlsx',
+    } = options;
+
+    // 1. Fetch all students and all attendance records concurrently
+    const [allStudents, allAttendance] = await Promise.all([
+      getAllStudents(),
+      getAllAttendanceRecords(),
+    ]);
+
+    // 2. Filter attendance records by class, section, and date / date range
+    const filteredAttendance = allAttendance.filter((r) => {
+      if (selectedClass !== 'All' && r.class !== selectedClass) return false;
+      if (selectedSection !== 'All' && r.section !== selectedSection) return false;
+      if (startDate && endDate) {
+        return r.date >= startDate && r.date <= endDate;
+      }
+      if (date) {
+        return r.date === date;
+      }
+      return true;
+    });
+
+    // 3. Build lookup maps for students
+    const studentMap = new Map<string, Student>();
+    for (const s of allStudents) {
+      studentMap.set(s.id, s);
+    }
+
+    // 4. Identify all students who should be included in the export matrix:
+    // - All currently Active students matching the selected class and section
+    // - PLUS all Inactive, Withdrawn, and Transferred students who have historical attendance records in filteredAttendance
+    // - PLUS any student who appears in filteredAttendance even if missing from allStudents (synthesized safely)
+    const exportStudentMap = new Map<string, Student>();
+
+    // 4a. Add currently active students in this class/section
+    for (const s of allStudents) {
+      if (s.status === 'Active') {
+        if (selectedClass === 'All' || s.class === selectedClass) {
+          if (selectedSection === 'All' || s.section === selectedSection) {
+            exportStudentMap.set(s.id, s);
+          }
+        }
+      }
+    }
+
+    // 4b. Add any student with historical attendance in filteredAttendance
+    for (const rec of filteredAttendance) {
+      if (!exportStudentMap.has(rec.studentId)) {
+        const existingStudent = studentMap.get(rec.studentId);
+        if (existingStudent) {
+          exportStudentMap.set(rec.studentId, existingStudent);
+        } else {
+          // Synthesize student entry from historical attendance record
+          exportStudentMap.set(rec.studentId, {
+            id: rec.studentId,
+            admissionNo: rec.studentId,
+            rollNo: rec.rollNo,
+            name: rec.studentName,
+            fatherName: '',
+            phone: '',
+            class: rec.class,
+            section: (rec.section as any) || 'A',
+            status: 'Withdrawn',
+            schoolId: rec.schoolId || 'GBHS-MAIN',
+            createdBy: rec.markedBy || 'system',
+            version: 1,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    const exportStudents = Array.from(exportStudentMap.values()).sort((a, b) => {
+      const classCompare = (a.class || '').localeCompare(b.class || '');
+      if (classCompare !== 0) return classCompare;
+      return parseInt(a.rollNo || '0', 10) - parseInt(b.rollNo || '0', 10);
+    });
+
+    if (exportStudents.length === 0) {
+      return { success: false, error: 'No students or attendance records found to export.' };
+    }
+
+    // 5. Determine list of dates to show in the matrix
+    let distinctDates = Array.from(new Set(filteredAttendance.map((r) => r.date))).sort();
+    if (distinctDates.length === 0) {
+      if (date) {
+        distinctDates = [date];
+      } else if (startDate && endDate) {
+        distinctDates = [startDate];
+      }
+    }
+
+    // 6. Index attendance by `${studentId}_${date}`
+    const attendanceIndex = new Map<string, AttendanceRecord>();
+    for (const rec of filteredAttendance) {
+      attendanceIndex.set(`${rec.studentId}_${rec.date}`, rec);
+    }
+
+    // 7. Build Attendance Matrix Rows
+    const matrixRows = exportStudents.map((student, idx) => {
+      let presentCount = 0;
+      let absentCount = 0;
+      let leaveCount = 0;
+      let lateCount = 0;
+
+      const row: Record<string, any> = {
+        'S#': idx + 1,
+        'Roll No': student.rollNo,
+        'Student Name': student.name,
+        "Father's Name": student.fatherName,
+        'Class': student.class,
+        'Section': student.section || 'A',
+        'Student Status': student.status || 'Active',
+      };
+
+      for (const d of distinctDates) {
+        const key = `${student.id}_${d}`;
+        const rec = attendanceIndex.get(key);
+        if (!rec) {
+          row[d] = '-';
+        } else {
+          switch (rec.status) {
+            case 'Present':
+              row[d] = 'P';
+              presentCount++;
+              break;
+            case 'Absent':
+              row[d] = 'A';
+              absentCount++;
+              break;
+            case 'Leave':
+              row[d] = 'L';
+              leaveCount++;
+              break;
+            case 'Late':
+              row[d] = 'T';
+              lateCount++;
+              break;
+            default:
+              row[d] = '-';
+          }
+        }
+      }
+
+      const totalEvalDays = distinctDates.length;
+      const rate = totalEvalDays > 0
+        ? Math.round(((presentCount + lateCount * 0.5) / totalEvalDays) * 100)
+        : 0;
+
+      row['Total Days'] = totalEvalDays;
+      row['Present (P)'] = presentCount;
+      row['Absent (A)'] = absentCount;
+      row['Leave (L)'] = leaveCount;
+      row['Late (T)'] = lateCount;
+      row['Attendance %'] = `${rate}%`;
+
+      return row;
+    });
+
+    // 7. Build Detailed Register Rows
+    const registerRows = filteredAttendance
+      .sort((a, b) => b.date.localeCompare(a.date) || parseInt(a.rollNo || '0', 10) - parseInt(b.rollNo || '0', 10))
+      .map((r, idx) => {
+        const student = studentMap.get(r.studentId) || exportStudentMap.get(r.studentId);
+        return {
+          'S#': idx + 1,
+          'Date': r.date,
+          'Class': r.class,
+          'Section': r.section,
+          'Roll No': r.rollNo,
+          'Student Name': r.studentName,
+          'Student Status': student?.status || 'Active',
+          'Status': r.status,
+          'Remarks': r.remarks || '',
+          'Marked By': r.markedBy || 'Staff Operator',
+        };
+      });
+
+    // If no filtered attendance records exist yet for this specific date, create placeholder entries for active students
+    if (registerRows.length === 0 && date) {
+      exportStudents
+        .filter((s) => s.status === 'Active')
+        .forEach((student, idx) => {
+          registerRows.push({
+            'S#': idx + 1,
+            'Date': date,
+            'Class': student.class,
+            'Section': student.section || 'A',
+            'Roll No': student.rollNo,
+            'Student Name': student.name,
+            'Student Status': student.status || 'Active',
+            'Status': 'Unmarked' as any,
+            'Remarks': '',
+            'Marked By': '-',
+          });
+        });
+    }
+
+    const clsStr = selectedClass.replace(/\s+/g, '_');
+    const secStr = selectedSection !== 'All' ? `_Sec_${selectedSection}` : '';
+    const dateRangeStr = startDate && endDate
+      ? `${startDate}_to_${endDate}`
+      : date || new Date().toISOString().split('T')[0];
+
+    const profile = getSchoolProfile();
+    const schoolPrefix = (profile.schoolShortName && profile.schoolShortName !== 'GBHS Jam Yousuf Colony')
+      ? profile.schoolShortName.replace(/[^a-zA-Z0-9]/g, '_')
+      : 'GBHS';
+    const baseFilename = `${schoolPrefix}_Attendance_${clsStr}${secStr}_${dateRangeStr}`;
+
+    // Handle CSV Format
+    if (format === 'csv') {
+      const csvSheet = XLSX.utils.json_to_sheet(matrixRows);
+      const csvContent = XLSX.utils.sheet_to_csv(csvSheet);
+      const filename = `${baseFilename}.csv`;
+
+      if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        link.click();
+        URL.revokeObjectURL(url);
+      }
+      return {
+        success: true,
+        filename,
+        count: filteredAttendance.length,
+        matrixRows,
+        registerRows,
+      };
+    }
+
+    // Handle XLSX Format (Default)
+    const workbook = XLSX.utils.book_new();
+
+    const matrixSheet = XLSX.utils.json_to_sheet(matrixRows);
+    XLSX.utils.book_append_sheet(workbook, matrixSheet, 'Attendance Matrix');
+
+    const registerSheet = XLSX.utils.json_to_sheet(registerRows);
+    XLSX.utils.book_append_sheet(workbook, registerSheet, 'Daily Register');
+
+    // Column widths for Matrix Sheet
+    const matrixCols: any[] = [
+      { wch: 6 },  // S#
+      { wch: 10 }, // Roll No
+      { wch: 22 }, // Name
+      { wch: 22 }, // Father Name
+      { wch: 10 }, // Class
+      { wch: 10 }, // Section
+      { wch: 14 }, // Student Status
+    ];
+    // Dynamic date column widths
+    distinctDates.forEach(() => matrixCols.push({ wch: 12 }));
+    // Summary columns
+    matrixCols.push(
+      { wch: 12 }, // Total Days
+      { wch: 14 }, // Present (P)
+      { wch: 14 }, // Absent (A)
+      { wch: 12 }, // Leave (L)
+      { wch: 12 }, // Late (T)
+      { wch: 14 }  // Attendance %
+    );
+    matrixSheet['!cols'] = matrixCols;
+
+    // Column widths for Register Sheet
+    registerSheet['!cols'] = [
+      { wch: 6 },  // S#
+      { wch: 12 }, // Date
+      { wch: 10 }, // Class
+      { wch: 10 }, // Section
+      { wch: 10 }, // Roll No
+      { wch: 22 }, // Student Name
+      { wch: 14 }, // Student Status
+      { wch: 12 }, // Status
+      { wch: 24 }, // Remarks
+      { wch: 20 }, // Marked By
+    ];
+
+    const filename = `${baseFilename}.xlsx`;
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      XLSX.writeFile(workbook, filename);
+    } else {
+      try {
+        XLSX.writeFile(workbook, filename);
+      } catch {
+        // Safe fallback for testing/headless environments
+      }
+    }
+
+    return {
+      success: true,
+      filename,
+      count: filteredAttendance.length,
+      matrixRows,
+      registerRows,
+      workbook,
+    };
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Failed to export attendance sheet.' };
+  }
+}
+

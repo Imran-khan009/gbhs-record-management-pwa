@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>GBHS Computer Operator Record Management</title>
-    <meta name="description" content="Offline-first, installable PWA for GBHS Computer Operator student records (Class 7-9), daily attendance, Excel import, and resilient IndexedDB-Supabase sync." />
-    <meta property="og:title" content="GBHS Computer Operator Record Management" />
-    <meta property="og:description" content="Offline-first, installable PWA for GBHS Computer Operator student records (Class 7-9), daily attendance, Excel import, and resilient IndexedDB-Supabase sync." />
+    <title>GBHS Jam Yousuf Colony • Computer Operator Console</title>
+    <meta name="description" content="Offline-first, installable PWA for GBHS Jam Yousuf Colony Computer Operator student records (Class 7-9), daily attendance, Excel import, and resilient IndexedDB-Supabase sync." />
+    <meta property="og:title" content="GBHS Jam Yousuf Colony • Computer Operator Console" />
+    <meta property="og:description" content="Offline-first, installable PWA for GBHS Jam Yousuf Colony Computer Operator student records (Class 7-9), daily attendance, Excel import, and resilient IndexedDB-Supabase sync." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="theme-color" content="#0f172a" />
@@ -16,6 +16,19 @@
     <meta name="apple-mobile-web-app-title" content="GBHS Records" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem('gbhs_theme_preference');
+          var theme = saved === 'light' ? 'light' : 'dark';
+          document.documentElement.classList.add(theme);
+          document.documentElement.setAttribute('data-theme', theme);
+          document.documentElement.style.colorScheme = theme;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', theme === 'dark' ? '#0f172a' : '#f8fafc');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

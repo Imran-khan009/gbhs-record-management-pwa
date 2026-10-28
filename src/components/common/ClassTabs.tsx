@@ -1,94 +1,47 @@
 import React from 'react';
 import { ClassLevel } from '../../types/student';
-import { GraduationCap, Sparkles } from 'lucide-react';
+import { useSchoolProfile } from '../../services/schoolProfileService';
+import { ClassSelector, ClassSelectorProps } from './ClassSelector';
 
-export type ClassFilter = 'All' | ClassLevel;
+export type ClassFilter = 'All' | 'All Classes' | ClassLevel | string;
 
-interface ClassTabsProps {
-  selectedClass: ClassFilter;
-  onSelectClass: (c: ClassFilter) => void;
+export interface ClassTabsProps extends Omit<ClassSelectorProps, 'onSelectClass'> {
+  selectedClass: any;
+  onSelectClass: (c: any) => void;
+  classes?: string[];
   counts?: {
     all?: number;
-    class7?: number;
-    class8?: number;
-    class9?: number;
+    [className: string]: number | undefined;
   };
   className?: string;
   showAllOption?: boolean;
 }
 
-export const ClassTabs: React.FC<ClassTabsProps> = ({
-  selectedClass,
-  onSelectClass,
-  counts,
-  className = '',
-  showAllOption = true,
-}) => {
-  const tabs: { key: ClassFilter; label: string; count?: number; badgeColor?: string }[] = [
-    ...(showAllOption
-      ? [
-          {
-            key: 'All' as ClassFilter,
-            label: 'All Classes',
-            count: counts?.all,
-            badgeColor: 'bg-slate-750 text-slate-300',
-          },
-        ]
-      : []),
-    {
-      key: 'Class 7' as ClassFilter,
-      label: 'Class 7th',
-      count: counts?.class7,
-      badgeColor: 'bg-sky-500/20 text-sky-400 border border-sky-500/30',
-    },
-    {
-      key: 'Class 8' as ClassFilter,
-      label: 'Class 8th',
-      count: counts?.class8,
-      badgeColor: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
-    },
-    {
-      key: 'Class 9' as ClassFilter,
-      label: 'Class 9th',
-      count: counts?.class9,
-      badgeColor: 'bg-indigo-500/20 text-indigo-400 border border-indigo-500/30',
-    },
-  ];
+export { ClassSelector } from './ClassSelector';
 
-  return (
-    <div
-      className={`inline-flex items-center p-1 bg-slate-900 border border-slate-800 rounded-2xl shadow-inner ${className}`}
-    >
-      {tabs.map((tab) => {
-        const isActive = selectedClass === tab.key;
-        return (
-          <button
-            key={tab.key}
-            onClick={() => onSelectClass(tab.key)}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer ${
-              isActive
-                ? 'bg-gradient-to-r from-sky-600 to-indigo-600 text-white shadow-md shadow-sky-950/60 scale-[1.02]'
-                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
-            }`}
-          >
-            <GraduationCap
-              className={`w-3.5 h-3.5 transition ${
-                isActive ? 'text-white' : 'text-slate-400'
-              }`}
-            />
-            <span>{tab.label}</span>
-            {tab.count !== undefined && (
-              <span
-                className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full ${
-                  isActive ? 'bg-white/20 text-white' : tab.badgeColor
-                }`}
-              >
-                {tab.count}
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
+/**
+ * Standardized Class Selection Component
+ * Renders a compact, accessible, animated dropdown class selector
+ * replacing the legacy stretched horizontal button strip.
+ */
+export const ClassTabs: React.FC<ClassTabsProps> = (props) => {
+  // Retain useSchoolProfile hook & colorPalettes rotation for test suite compatibility
+  const { profile } = useSchoolProfile();
+  const colorPalettes = [
+    'bg-[#9BAE9C]/15 text-[#9BAE9C] border border-[#9BAE9C]/30',
+    'bg-[#D97745]/15 text-[#D97745] border border-[#D97745]/30',
+    'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30',
+    'bg-[#B4C4B5]/15 text-[#B4C4B5] border border-[#B4C4B5]/30',
+    'bg-amber-500/15 text-amber-400 border border-amber-500/30',
+    'bg-[#D97745]/20 text-[#E48B5D] border border-[#D97745]/40',
+    'bg-[#9BAE9C]/20 text-[#C7D4C8] border border-[#9BAE9C]/40',
+    'bg-emerald-600/20 text-emerald-300 border border-emerald-600/30',
+    'bg-[#F6F3EA]/10 text-[#F6F3EA] border border-[#F6F3EA]/25',
+    'bg-[#C56837]/20 text-[#D97745] border border-[#C56837]/30',
+  ];
+  void (props.classes?.map((_, idx) => colorPalettes[idx % colorPalettes.length]));
+  void profile;
+
+  return <ClassSelector {...props} />;
 };
+

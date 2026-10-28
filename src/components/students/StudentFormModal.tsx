@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Student, ClassLevel, Section, StudentStatus } from '../../types/student';
 import { createStudent, updateStudent } from '../../services/recordService';
 import { useAuth } from '../../context/AuthContext';
+import { useSchoolProfile, DEFAULT_CLASSES, sanitizeClasses, sortClasses } from '../../services/schoolProfileService';
 import {
   X,
   UserPlus,
@@ -30,24 +31,41 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
   onClose,
   onSaved,
   studentToEdit,
-  defaultClass = 'Class 7',
+  defaultClass = 'Class 1',
 }) => {
   const { session } = useAuth();
+  const { profile } = useSchoolProfile(session?.user?.workspaceOwnerId || session?.user?.id);
+
+  const rawClasses = sanitizeClasses(profile.classes);
+  const availableClasses = sortClasses(rawClasses.length > 0 ? rawClasses : DEFAULT_CLASSES);
+
+  // Preserve student's existing class in edit mode even if not in standard class list
+  const existingStudentClass = studentToEdit?.class;
+  const displayClasses = (existingStudentClass && !availableClasses.includes(existingStudentClass))
+    ? [existingStudentClass, ...availableClasses]
+    : availableClasses;
+
+  const validDefaultClass = (defaultClass && !defaultClass.toLowerCase().startsWith('all') && availableClasses.includes(defaultClass))
+    ? defaultClass
+    : (availableClasses.includes('Class 1') ? 'Class 1' : availableClasses[0] || 'Class 1');
 
   // Exactly the 13 fields in exact order
   const [serialNo, setSerialNo] = useState(''); // 1. S# (Serial Number)
   const [rollNo, setRollNo] = useState(''); // 2. Roll Num (Roll Number)
-  const [district, setDistrict] = useState('Lasbela'); // 3. District
-  const [schoolName, setSchoolName] = useState('GBHS Jam Yousf Colony'); // 4. School Name
+  const [district, setDistrict] = useState(profile.district || 'Lasbela'); // 3. District
+  const [schoolName, setSchoolName] = useState(profile.schoolName || 'GBHS Jam Yousf Colony'); // 4. School Name
   const [trade, setTrade] = useState('Computer Operator'); // 5. Trade
   const [name, setName] = useState(''); // 6. Name of Learner
   const [fatherName, setFatherName] = useState(''); // 7. Father Name
   const [gender, setGender] = useState<'Male' | 'Female' | 'Other'>('Male'); // 8. Gender
   const [dob, setDob] = useState(''); // 9. DOB (Date of Birth)
-  const [classLevel, setClassLevel] = useState<ClassLevel>(defaultClass); // 10. Class
+  const [classLevel, setClassLevel] = useState<ClassLevel>(validDefaultClass as ClassLevel); // 10. Class
+  const [section, setSection] = useState<Section>('A'); // Section (A, B, C, General)
   const [dateOfCenterBeginning, setDateOfCenterBeginning] = useState(''); // 11. Date of Center Beginning
   const [guardianContact, setGuardianContact] = useState(''); // 12. Guardian Contact
   const [registeredStatus, setRegisteredStatus] = useState('Registerd'); // 13. Registerd
+  const [status, setStatus] = useState<StudentStatus>('Active');
+  const [statusReason, setStatusReason] = useState('');
 
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -56,34 +74,41 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
     if (studentToEdit) {
       setSerialNo(studentToEdit.serialNo || '');
       setRollNo(studentToEdit.rollNo || '');
-      setDistrict(studentToEdit.district || 'Lasbela');
-      setSchoolName(studentToEdit.schoolName || 'GBHS Jam Yousf Colony');
+      setDistrict(studentToEdit.district || profile.district || 'Lasbela');
+      setSchoolName(studentToEdit.schoolName || profile.schoolName || 'GBHS Jam Yousf Colony');
       setTrade(studentToEdit.trade || 'Computer Operator');
       setName(studentToEdit.name || '');
       setFatherName(studentToEdit.fatherName || '');
       setGender((studentToEdit.gender as 'Male' | 'Female' | 'Other') || 'Male');
       setDob(studentToEdit.dob || '');
-      setClassLevel(studentToEdit.class || defaultClass);
+      setClassLevel(studentToEdit.class || (validDefaultClass as ClassLevel));
+      setSection((studentToEdit.section as Section) || 'A');
       setDateOfCenterBeginning(studentToEdit.dateOfCenterBeginning || studentToEdit.admissionDate || '');
       setGuardianContact(studentToEdit.guardianContact || studentToEdit.phone || '');
-      setRegisteredStatus(studentToEdit.registeredStatus || (studentToEdit.status === 'Active' ? 'Registerd' : 'Unregisterd'));
+      const currentStatus: StudentStatus = studentToEdit.status || (studentToEdit.registeredStatus?.toLowerCase().includes('reg') ? 'Active' : 'Inactive');
+      setStatus(currentStatus);
+      setRegisteredStatus(studentToEdit.registeredStatus || (currentStatus === 'Active' ? 'Registerd' : currentStatus));
+      setStatusReason(studentToEdit.withdrawalReason || studentToEdit.transferDetails || '');
     } else {
       setSerialNo('');
       setRollNo('');
-      setDistrict('Lasbela');
-      setSchoolName('GBHS Jam Yousf Colony');
+      setDistrict(profile.district || 'Lasbela');
+      setSchoolName(profile.schoolName || 'GBHS Jam Yousf Colony');
       setTrade('Computer Operator');
       setName('');
       setFatherName('');
       setGender('Male');
       setDob('');
-      setClassLevel(defaultClass);
+      setClassLevel(validDefaultClass as ClassLevel);
+      setSection('A');
       setDateOfCenterBeginning('');
       setGuardianContact('');
+      setStatus('Active');
       setRegisteredStatus('Registerd');
+      setStatusReason('');
     }
     setError(null);
-  }, [studentToEdit, defaultClass, isOpen]);
+  }, [studentToEdit, defaultClass, isOpen, profile.district, profile.schoolName, validDefaultClass]);
 
   if (!isOpen) return null;
 
@@ -106,9 +131,10 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
 
     const finalSerialNo = serialNo.trim() || rollNo.trim();
     const isTempAdm = studentToEdit?.admissionNo?.includes('TEMP');
+    const classNum = classLevel.replace(/\D/g, '') || '1';
     const finalAdmNo =
       !studentToEdit?.admissionNo || isTempAdm
-        ? `ADM-${classLevel.replace('Class ', '')}A-${rollNo.trim().padStart(3, '0')}`
+        ? `ADM-${classNum}${section}-${rollNo.trim().padStart(3, '0')}`
         : studentToEdit.admissionNo;
     const userEmail = session?.user.email || 'operator@gbhs.edu.pk';
     setIsSubmitting(true);
@@ -131,10 +157,14 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
 
       // Synced system fields
       admissionNo: finalAdmNo,
-      section: studentToEdit?.section || ('A' as Section),
+      section: section as Section,
       phone: guardianContact.trim(),
-      status: (registeredStatus.toLowerCase().includes('reg') ? 'Active' : 'Inactive') as StudentStatus,
+      status,
       admissionDate: dateOfCenterBeginning || undefined,
+      withdrawalReason: status === 'Withdrawn' ? (statusReason.trim() || undefined) : undefined,
+      withdrawnDate: status === 'Withdrawn' ? (studentToEdit?.withdrawnDate || new Date().toISOString().split('T')[0]) : undefined,
+      transferDetails: status === 'Transferred' ? (statusReason.trim() || undefined) : undefined,
+      transferredDate: status === 'Transferred' ? (studentToEdit?.transferredDate || new Date().toISOString().split('T')[0]) : undefined,
     };
 
     try {
@@ -164,12 +194,12 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-xs overflow-y-auto">
-      <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-4 sm:my-8 flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4 backdrop-blur-xs overflow-y-auto animate-in fade-in duration-150">
+      <div className="w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-4 sm:my-8 flex flex-col max-h-[92vh] animate-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-850 shrink-0">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-xl bg-[#D97745]/10 border border-[#D97745]/20 text-[#D97745] flex items-center justify-center">
               <UserPlus className="w-5 h-5" />
             </div>
             <div>
@@ -184,7 +214,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
 
           <button
             onClick={onClose}
-            className="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+            className="btn-interactive text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -202,7 +232,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
           {/* Section: Institution & Identifier Details (Fields 1-5) */}
           <div className="space-y-3.5 rounded-xl p-4 bg-slate-850/60 border border-slate-800">
             <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-              <Hash className="w-4 h-4 text-sky-400" />
+              <Hash className="w-4 h-4 text-[#D97745]" />
               <h4 className="text-xs font-bold text-white uppercase tracking-wider">
                 Registration & Center Details
               </h4>
@@ -219,7 +249,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={serialNo}
                   onChange={(e) => setSerialNo(e.target.value)}
                   placeholder="e.g. 1, 2, 3"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-mono"
                 />
               </div>
 
@@ -234,7 +264,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={rollNo}
                   onChange={(e) => setRollNo(e.target.value)}
                   placeholder="e.g. 3473, 1078, 1"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono font-bold"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-mono font-bold"
                 />
               </div>
 
@@ -248,7 +278,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={district}
                   onChange={(e) => setDistrict(e.target.value)}
                   placeholder="e.g. Lasbela"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
             </div>
@@ -264,7 +294,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={schoolName}
                   onChange={(e) => setSchoolName(e.target.value)}
                   placeholder="e.g. GBHS Jam Yousf Colony"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
@@ -278,7 +308,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={trade}
                   onChange={(e) => setTrade(e.target.value)}
                   placeholder="e.g. Computer Operator"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
             </div>
@@ -305,7 +335,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="e.g. Nadir Ali"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-semibold"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-semibold"
                 />
               </div>
 
@@ -320,7 +350,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={fatherName}
                   onChange={(e) => setFatherName(e.target.value)}
                   placeholder="e.g. Mehrullah"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
             </div>
@@ -334,7 +364,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                 <select
                   value={gender}
                   onChange={(e) => setGender(e.target.value as 'Male' | 'Female' | 'Other')}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 >
                   <option value="Male">Male</option>
                   <option value="Female">Female</option>
@@ -351,7 +381,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   type="date"
                   value={dob}
                   onChange={(e) => setDob(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
             </div>
@@ -366,7 +396,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
               </h4>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
               {/* 10. Class */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
@@ -375,11 +405,31 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                 <select
                   value={classLevel}
                   onChange={(e) => setClassLevel(e.target.value as ClassLevel)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-medium"
                 >
-                  <option value="Class 7">Class 7</option>
-                  <option value="Class 8">Class 8</option>
-                  <option value="Class 9">Class 9</option>
+                  {/* Dynamic class options: availableClasses.map((cls) => */}
+                  {displayClasses.map((cls) => (
+                    <option key={cls} value={cls} className="bg-slate-900 text-white py-1">
+                      {cls}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Section */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Section <span className="text-rose-400">*</span>
+                </label>
+                <select
+                  value={section}
+                  onChange={(e) => setSection(e.target.value as Section)}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-medium"
+                >
+                  <option value="A" className="bg-slate-900 text-white">Section A</option>
+                  <option value="B" className="bg-slate-900 text-white">Section B</option>
+                  <option value="C" className="bg-slate-900 text-white">Section C</option>
+                  <option value="General" className="bg-slate-900 text-white">General Section</option>
                 </select>
               </div>
 
@@ -392,7 +442,7 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   type="date"
                   value={dateOfCenterBeginning}
                   onChange={(e) => setDateOfCenterBeginning(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
                 />
               </div>
             </div>
@@ -408,25 +458,47 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
                   value={guardianContact}
                   onChange={(e) => setGuardianContact(e.target.value)}
                   placeholder="e.g. 03412089077"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-mono"
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-mono"
                 />
               </div>
 
-              {/* 13. Registerd */}
+              {/* 13. Student Status */}
               <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  13. Registerd
+                  13. Student Status
                 </label>
                 <select
-                  value={registeredStatus}
-                  onChange={(e) => setRegisteredStatus(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-sky-500 font-medium"
+                  value={status}
+                  onChange={(e) => {
+                    const next = e.target.value as StudentStatus;
+                    setStatus(next);
+                    setRegisteredStatus(next === 'Active' ? 'Registerd' : next);
+                  }}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745] font-medium"
                 >
-                  <option value="Registerd">Registerd</option>
-                  <option value="Unregisterd">Unregisterd</option>
+                  <option value="Active">Active (Registered)</option>
+                  <option value="Inactive">Inactive</option>
+                  <option value="Withdrawn">Withdrawn (Dropout / Left)</option>
+                  <option value="Transferred">Transferred</option>
                 </select>
               </div>
             </div>
+
+            {/* Lifecycle Details (Reason for Withdrawn / Transferred) */}
+            {(status === 'Withdrawn' || status === 'Transferred') && (
+              <div className="pt-2">
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  {status === 'Withdrawn' ? 'Withdrawal / Dropout Reason' : 'Transfer Details (Destination School)'}
+                </label>
+                <input
+                  type="text"
+                  value={statusReason}
+                  onChange={(e) => setStatusReason(e.target.value)}
+                  placeholder={status === 'Withdrawn' ? 'e.g. Relocated to another district, financial hardship...' : 'e.g. Transferred to GBHS Hub, SLC #1042'}
+                  className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-[#D97745]"
+                />
+              </div>
+            )}
           </div>
 
           {/* Footer */}
@@ -440,14 +512,14 @@ export const StudentFormModal: React.FC<StudentFormModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+                className="btn-interactive px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="flex items-center gap-2 bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-semibold px-5 py-2 rounded-xl transition cursor-pointer shadow-md shadow-sky-900/30 active:scale-95"
+                className="btn-interactive flex items-center gap-2 bg-[#D97745] hover:bg-[#c26535] disabled:opacity-50 text-white text-xs font-semibold px-5 py-2 rounded-xl cursor-pointer shadow-sm shadow-[#D97745]/20"
               >
                 <Save className="w-4 h-4" />
                 <span>{isSubmitting ? 'Saving...' : studentToEdit ? 'Update Student Record' : 'Save Student Record'}</span>

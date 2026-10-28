@@ -1,4 +1,5 @@
 import { Student, AttendanceRecord } from './student';
+import { TeachingLogEntry, PracticalProgressEntry, AbsenteeFollowupEntry } from './modules';
 
 export type SyncOverallStatus =
   | 'Offline'
@@ -10,16 +11,16 @@ export type SyncOverallStatus =
   | 'Authentication required';
 
 export type OperationType = 'CREATE' | 'UPDATE' | 'DELETE';
-export type EntityType = 'student' | 'attendance';
+export type EntityType = 'student' | 'attendance' | 'teaching_log' | 'practical_progress' | 'absentee_followup';
 
 export interface OutboxOperation {
   opId: string; // Unique operation UUID
-  entityId: string; // Stable ID of the student or attendance record
+  entityId: string; // Stable ID of the record
   entityType: EntityType;
   operationType: OperationType;
-  payload: Student | AttendanceRecord | { id: string };
+  payload: Student | AttendanceRecord | TeachingLogEntry | PracticalProgressEntry | AbsenteeFollowupEntry | { id: string };
   timestamp: number; // millisecond timestamp of operation
-  status: 'pending' | 'syncing' | 'failed' | 'conflict' | 'synced';
+  status: 'pending' | 'syncing' | 'failed' | 'conflict' | 'synced' | 'legacy_archived';
   retryCount: number;
   lastAttemptAt?: number;
   nextRetryAt?: number;
@@ -27,6 +28,7 @@ export interface OutboxOperation {
   errorType?: 'network' | 'validation' | 'conflict' | 'auth' | 'server';
   userEmail: string;
   version: number; // Snapshot of entity version when operation was queued
+  isLegacy?: boolean;
 }
 
 export interface ConflictItem {

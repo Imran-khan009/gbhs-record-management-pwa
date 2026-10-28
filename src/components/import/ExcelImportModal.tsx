@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 
 export type ImportStrategy = 'update' | 'replace' | 'skip';
-type FilterTab = 'all' | 'new' | 'update' | 'duplicate' | 'invalid';
+type FilterTab = 'all' | 'valid' | 'invalid' | 'new' | 'update' | 'duplicate';
 
 interface ExcelImportModalProps {
   isOpen: boolean;
@@ -278,6 +278,18 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
       setCommitResult(res);
       setDiagnosticLogs(res.diagnostics);
       await refreshDbCount();
+
+      // Zero-Refresh Reactivity
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('gbhs_records_imported', {
+            detail: { moduleType: 'students', count: res.committedCount },
+          })
+        );
+        window.dispatchEvent(new CustomEvent('gbhs_students_changed'));
+        window.dispatchEvent(new CustomEvent('gbhs_dashboard_refresh'));
+      }
+
       onImportComplete();
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to commit import records.');
@@ -311,8 +323,9 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
   const errorCount = rows.filter((r) => r.validationErrors.length > 0).length;
   const selectedCount = rows.filter((r) => r.selected).length;
 
-  // Filtered rows for the preview table
+  // Filtered rows for the preview table across All, Valid, and Invalid tabs
   const displayedRows = rows.filter((r) => {
+    if (filterTab === 'valid') return r.validationErrors.length === 0;
     if (filterTab === 'new') return r.actionType === 'create' && r.validationErrors.length === 0;
     if (filterTab === 'update') return r.actionType === 'update' && r.validationErrors.length === 0;
     if (filterTab === 'duplicate') return r.isDuplicate || r.isAmbiguousMatch;
@@ -345,7 +358,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
           <div className="flex items-center gap-3">
             <button
               onClick={downloadSampleExcelTemplate}
-              className="flex items-center gap-1.5 text-xs text-sky-400 hover:text-sky-300 font-semibold px-2.5 py-1.5 rounded-lg bg-sky-950/40 border border-sky-800/80 transition cursor-pointer"
+              className="btn-interactive flex items-center gap-1.5 text-xs text-[#9BAE9C] hover:text-white font-semibold px-2.5 py-1.5 rounded-lg bg-[#2B352E] hover:bg-[#344038] border border-[#9BAE9C]/30 transition cursor-pointer"
               title="Download official Excel template for Class 7, 8, 9"
             >
               <Download className="w-3.5 h-3.5" />
@@ -353,7 +366,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
             </button>
             <button
               onClick={onClose}
-              className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
+              className="btn-interactive text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -367,9 +380,9 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
             <button
               type="button"
               onClick={() => handleStrategyChange('update')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              className={`btn-interactive flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 importStrategy === 'update'
-                  ? 'bg-sky-600 text-white shadow-sm border border-sky-500'
+                  ? 'bg-[#D97745] text-white shadow-sm border border-[#D97745]/80'
                   : 'bg-slate-850 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
               }`}
             >
@@ -380,9 +393,9 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
             <button
               type="button"
               onClick={() => handleStrategyChange('skip')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              className={`btn-interactive flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 importStrategy === 'skip'
-                  ? 'bg-indigo-600 text-white shadow-sm border border-indigo-500'
+                  ? 'bg-[#2B352E] text-white shadow-sm border border-[#9BAE9C]/50'
                   : 'bg-slate-850 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
               }`}
             >
@@ -393,7 +406,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
             <button
               type="button"
               onClick={() => handleStrategyChange('replace')}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
+              className={`btn-interactive flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer ${
                 importStrategy === 'replace'
                   ? 'bg-amber-600 text-white shadow-sm border border-amber-500'
                   : 'bg-slate-850 text-slate-400 hover:bg-slate-800 hover:text-slate-200 border border-slate-800'
@@ -705,6 +718,20 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                   </button>
 
                   <button
+                    onClick={() => setFilterTab('valid')}
+                    className={`px-3 py-1 rounded-lg font-semibold transition cursor-pointer flex items-center gap-1.5 ${
+                      filterTab === 'valid'
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'text-emerald-400 hover:text-emerald-300'
+                    }`}
+                  >
+                    <span>Valid</span>
+                    <span className="px-1.5 py-0.2 rounded-full bg-emerald-950 text-emerald-300 text-[10px] font-bold">
+                      {createCount + updateCount}
+                    </span>
+                  </button>
+
+                  <button
                     onClick={() => setFilterTab('new')}
                     className={`px-3 py-1 rounded-lg font-semibold transition cursor-pointer flex items-center gap-1.5 ${
                       filterTab === 'new'
@@ -937,11 +964,11 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
                     <div key={idx} className="flex items-start gap-2 text-slate-400">
                       <span className="text-slate-600 shrink-0">[{log.timestamp}]</span>
                       <span className={`font-bold shrink-0 ${
-                        log.stage === 'DETECT' ? 'text-indigo-400' :
-                        log.stage === 'PARSE' ? 'text-sky-400' :
+                        log.stage === 'DETECT' ? 'text-[#9BAE9C]' :
+                        log.stage === 'PARSE' ? 'text-[#D97745]' :
                         log.stage === 'VALIDATE' ? 'text-emerald-400' :
-                        log.stage === 'LOCAL_SAVE' ? 'text-cyan-400' :
-                        log.stage === 'CLOUD_SYNC' ? 'text-teal-400' : 'text-amber-400'
+                        log.stage === 'LOCAL_SAVE' ? 'text-[#F6F3EA]' :
+                        log.stage === 'CLOUD_SYNC' ? 'text-[#D97745]' : 'text-amber-400'
                       }`}>
                         [{log.stage}]
                       </span>
@@ -965,7 +992,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
+              className="btn-interactive px-4 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition cursor-pointer"
             >
               Close
             </button>
@@ -973,7 +1000,7 @@ export const ExcelImportModal: React.FC<ExcelImportModalProps> = ({
               <button
                 onClick={handleCommit}
                 disabled={selectedCount === 0 || isCommitting}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-semibold px-5 py-2 rounded-xl transition cursor-pointer shadow-md"
+                className="btn-interactive flex items-center gap-2 bg-[#D97745] hover:bg-[#c26535] disabled:opacity-40 text-white text-xs font-semibold px-5 py-2 rounded-xl cursor-pointer shadow-sm shadow-[#D97745]/20"
               >
                 {isCommitting ? (
                   <>

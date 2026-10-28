@@ -9,6 +9,9 @@ import {
   exportPracticalProgressToExcel,
 } from '../../services/modulesService';
 import { getAllStudents } from '../../services/db';
+import { useAuth } from '../../context/AuthContext';
+import { getWorkspacePermissions } from '../../services/permissionService';
+import { useSchoolProfile } from '../../services/schoolProfileService';
 import { ClassTabs, ClassFilter } from '../common/ClassTabs';
 import {
   Award,
@@ -26,9 +29,23 @@ import {
   TrendingUp,
   Percent,
   CheckCircle,
+  Download,
+  Upload,
 } from 'lucide-react';
+import { StudentDetailModal } from '../students/StudentDetailModal';
+import { WhatsAppAlertModal } from '../absentee/WhatsAppAlertModal';
+import { downloadPracticalTrackerTemplate } from '../../services/bulkModuleImportService';
+import { ModuleImportModal } from '../import/ModuleImportModal';
+import { DEFAULT_CLASSES, sanitizeClasses, sortClasses } from '../../services/schoolProfileService';
+import { getClassBadgeColor } from '../../services/classNormalizationService';
 
 export const PracticalProgressView: React.FC = () => {
+  const { session } = useAuth();
+  const permissions = getWorkspacePermissions(session?.user);
+  const { profile } = useSchoolProfile(session?.user?.workspaceOwnerId || session?.user?.id);
+
+  const availableClasses = sortClasses(sanitizeClasses(profile.classes));
+
   const [records, setRecords] = useState<PracticalProgressEntry[]>([]);
   const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -36,21 +53,52 @@ export const PracticalProgressView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | SkillStatus>('All');
   const [remedialFilter, setRemedialFilter] = useState<'All' | 'Yes' | 'No'>('All');
-  const [classCounts, setClassCounts] = useState<{ all: number; class7: number; class8: number; class9: number }>({
+  const [classCounts, setClassCounts] = useState<{ all: number; [key: string]: number }>({
     all: 0,
-    class7: 0,
-    class8: 0,
-    class9: 0,
   });
 
   // Modal states
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<PracticalProgressEntry | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<PracticalProgressEntry | null>(null);
+  const [selectedStudentForModal, setSelectedStudentForModal] = useState<Student | null>(null);
+  const [whatsAppStudent, setWhatsAppStudent] = useState<Student | null>(null);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  const handleOpenStudentDetail = (item: PracticalProgressEntry) => {
+    const match = allStudents.find(
+      (s) =>
+        (item.studentId && s.id === item.studentId) ||
+        (item.registrationId && (s.rollNo === item.registrationId || s.admissionNo === item.registrationId)) ||
+        s.name.toLowerCase() === item.studentName.toLowerCase()
+    );
+    if (match) {
+      setSelectedStudentForModal(match);
+    } else {
+      setSelectedStudentForModal({
+        id: item.studentId || `temp-${item.id}`,
+        name: item.studentName,
+        fatherName: '—',
+        rollNo: item.registrationId || '—',
+        admissionNo: item.registrationId || '—',
+        class: item.class,
+        section: 'A',
+        guardianContact: '',
+        phone: '',
+        status: 'Active',
+        version: 1,
+        schoolId: profile.emisCode || 'GBHS-MAIN',
+        createdBy: 'system',
+        createdAt: item.createdAt || new Date().toISOString(),
+        updatedAt: item.createdAt || new Date().toISOString(),
+      });
+    }
+  };
+
 
   // Form Fields
   const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
-  const [formClass, setFormClass] = useState<ClassLevel>('Class 7');
+  const [formClass, setFormClass] = useState<ClassLevel>(() => availableClasses[0] || 'Class 1');
   const [formStudentId, setFormStudentId] = useState('');
   const [formStudentName, setFormStudentName] = useState('');
   const [formRegistrationId, setFormRegistrationId] = useState('');
@@ -78,12 +126,16 @@ export const PracticalProgressView: React.FC = () => {
       setAllStudents(students);
 
       const all = await fetchPracticalProgress('All');
-      setClassCounts({
-        all: all.length,
-        class7: all.filter((r) => r.class === 'Class 7').length,
-        class8: all.filter((r) => r.class === 'Class 8').length,
-        class9: all.filter((r) => r.class === 'Class 9').length,
+      const dynamicCounts: Record<string, number> = { all: all.length };
+      availableClasses.forEach((cls) => {
+        const normCls = cls.trim().toLowerCase().replace(/\s+/g, ' ');
+        const count = all.filter((r) => (r.class || '').trim().toLowerCase().replace(/\s+/g, ' ') === normCls).length;
+        dynamicCounts[cls] = count;
+        const rawKey = cls.toLowerCase().replace(/[\s_-]+/g, '');
+        dynamicCounts[rawKey] = count;
       });
+
+      setClassCounts(dynamicCounts as any);
     } catch (err) {
       console.error('Failed to load practical progress:', err);
     } finally {
@@ -93,6 +145,15 @@ export const PracticalProgressView: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    const handleReactivity = () => {
+      loadData();
+    };
+    window.addEventListener('gbhs_records_imported', handleReactivity);
+    window.addEventListener('gbhs_practical_changed', handleReactivity);
+    return () => {
+      window.removeEventListener('gbhs_records_imported', handleReactivity);
+      window.removeEventListener('gbhs_practical_changed', handleReactivity);
+    };
   }, [selectedClass]);
 
   const handleScoreChange = (score: number) => {
@@ -112,21 +173,18 @@ export const PracticalProgressView: React.FC = () => {
 
   const handleClassChangeInForm = (cls: ClassLevel) => {
     setFormClass(cls);
-    const studentsInClass = allStudents.filter((s) => s.class === cls);
-    if (studentsInClass.length > 0) {
-      const first = studentsInClass[0];
-      setFormStudentId(first.id);
-      setFormStudentName(first.name);
-      setFormRegistrationId(first.rollNo || first.admissionNo);
-    } else {
-      setFormStudentId('');
-      setFormStudentName('');
-      setFormRegistrationId('');
-    }
+    setFormStudentId('');
+    setFormStudentName('');
+    setFormRegistrationId('');
   };
 
   const handleStudentSelect = (studentId: string) => {
     setFormStudentId(studentId);
+    if (!studentId) {
+      setFormStudentName('');
+      setFormRegistrationId('');
+      return;
+    }
     const found = allStudents.find((s) => s.id === studentId);
     if (found) {
       setFormStudentName(found.name);
@@ -135,21 +193,14 @@ export const PracticalProgressView: React.FC = () => {
   };
 
   const handleOpenCreate = () => {
+    if (permissions.isReadOnly) return;
     setEditingEntry(null);
     setFormDate(new Date().toISOString().split('T')[0]);
-    const defaultCls = selectedClass !== 'All' ? selectedClass : 'Class 7';
+    const defaultCls = selectedClass !== 'All' ? selectedClass : (availableClasses[0] || 'Class 1');
     setFormClass(defaultCls);
-
-    const studentsInClass = allStudents.filter((s) => s.class === defaultCls);
-    if (studentsInClass.length > 0) {
-      setFormStudentId(studentsInClass[0].id);
-      setFormStudentName(studentsInClass[0].name);
-      setFormRegistrationId(studentsInClass[0].rollNo || studentsInClass[0].admissionNo);
-    } else {
-      setFormStudentId('');
-      setFormStudentName('');
-      setFormRegistrationId('');
-    }
+    setFormStudentId('');
+    setFormStudentName('');
+    setFormRegistrationId('');
 
     setFormSkillTask(
       defaultCls === 'Class 7'
@@ -172,6 +223,7 @@ export const PracticalProgressView: React.FC = () => {
   };
 
   const handleOpenEdit = (entry: PracticalProgressEntry) => {
+    if (permissions.isReadOnly) return;
     setEditingEntry(entry);
     setFormDate(entry.assessmentDate);
     setFormClass(entry.class);
@@ -194,8 +246,8 @@ export const PracticalProgressView: React.FC = () => {
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formStudentName.trim()) {
-      setFormError('Please select or enter the student name.');
+    if (!formStudentId || !formStudentName.trim()) {
+      setFormError('Please select a student from the Student Master Roster.');
       return;
     }
     if (!formSkillTask.trim()) {
@@ -257,6 +309,7 @@ export const PracticalProgressView: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (permissions.isReadOnly) return;
     if (window.confirm('Are you sure you want to delete this practical progress record?')) {
       await deletePracticalProgress(id);
       await loadData();
@@ -311,38 +364,72 @@ export const PracticalProgressView: React.FC = () => {
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => exportPracticalProgressToExcel(filteredRecords, selectedClass)}
-            disabled={filteredRecords.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700/80 transition cursor-pointer disabled:opacity-40"
+            onClick={() => downloadPracticalTrackerTemplate({ classLevel: selectedClass, students: allStudents })}
+            className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#9BAE9C]/30 cursor-pointer"
+            title="Download Practical Tracker Excel/CSV Template with Student Roster"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-            <span>Export Sheet</span>
+            <Download className="w-3.5 h-3.5 text-[#9BAE9C]" />
+            <span>Template</span>
           </button>
 
-          <button
-            onClick={handleOpenCreate}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-md shadow-emerald-950/50 transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Assessment</span>
-          </button>
+          {permissions.canImport && (
+            <button
+              onClick={() => setIsImportModalOpen(true)}
+              className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#9BAE9C]/30 cursor-pointer"
+              title="Bulk Import Practical Progress from Excel or CSV"
+            >
+              <Upload className="w-3.5 h-3.5 text-[#D97745]" />
+              <span>Bulk Import</span>
+            </button>
+          )}
+
+          {permissions.canExport && (
+            <button
+              onClick={() => exportPracticalProgressToExcel(filteredRecords, selectedClass)}
+              disabled={filteredRecords.length === 0}
+              className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#9BAE9C]/30 cursor-pointer disabled:opacity-40"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-[#9BAE9C]" />
+              <span>Export Sheet</span>
+            </button>
+          )}
+
+          {permissions.canAdd && (
+            <button
+              onClick={handleOpenCreate}
+              className="btn-interactive flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#D97745] hover:bg-[#c26535] text-white shadow-sm shadow-[#D97745]/20 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Add Assessment</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Class Switching Tabs & Filters */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800">
-        <ClassTabs
-          selectedClass={selectedClass}
-          onSelectClass={setSelectedClass}
-          counts={classCounts}
-        />
+      {/* Read-Only Access Banner */}
+      {permissions.isReadOnly && (
+        <div className="p-3.5 rounded-xl border border-amber-800/80 bg-amber-950/40 text-xs text-amber-300 flex items-center gap-2.5">
+          <span>
+            <strong>Approved Staff Access (Read & Export):</strong> You are viewing practical progress records in this shared workspace with read and export permissions. Adding, editing, or deleting assessments can only be performed by the Workspace Owner.
+          </span>
+        </div>
+      )}
 
+      {/* Class Selector & Filters Toolbar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#2B352E]/60 p-2.5 rounded-2xl border border-[#3D4A41]">
         <div className="flex items-center gap-2 flex-wrap">
+          <ClassTabs
+            selectedClass={selectedClass}
+            onSelectClass={setSelectedClass}
+            classes={availableClasses}
+            counts={classCounts}
+          />
+
           {/* Status Filter */}
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="bg-slate-850 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-medium cursor-pointer"
+            className="btn-interactive bg-[#202822] border border-[#3D4A41] rounded-xl px-2.5 py-2 text-xs text-[#F6F3EA] font-medium cursor-pointer focus:outline-none focus:border-[#D97745] transition-colors duration-150"
           >
             <option value="All">All Skill Levels</option>
             <option value="Proficient">Proficient (&gt;=80)</option>
@@ -354,73 +441,82 @@ export const PracticalProgressView: React.FC = () => {
           <select
             value={remedialFilter}
             onChange={(e) => setRemedialFilter(e.target.value as any)}
-            className="bg-slate-850 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-medium cursor-pointer"
+            className="btn-interactive bg-[#202822] border border-[#3D4A41] rounded-xl px-2.5 py-2 text-xs text-[#F6F3EA] font-medium cursor-pointer focus:outline-none focus:border-[#D97745] transition-colors duration-150"
           >
             <option value="All">All Practice States</option>
             <option value="Yes">Remedial Required</option>
             <option value="No">No Remedial Required</option>
           </select>
+        </div>
 
-          {/* Search */}
-          <div className="relative w-full sm:w-56">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search student or skill..."
-              className="w-full bg-slate-850 border border-slate-700/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
-            />
-          </div>
+        {/* Search */}
+        <div className="relative w-full md:w-64">
+          <Search className="w-3.5 h-3.5 text-[#9BAE9C] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search student or skill..."
+            className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl pl-8 pr-8 py-2 text-xs text-[#F6F3EA] placeholder-[#9BAE9C]/60 focus:outline-none focus:border-[#D97745] transition-colors duration-150"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="btn-interactive absolute right-2.5 top-1/2 -translate-y-1/2 text-[#9BAE9C] hover:text-[#F6F3EA]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
       {/* KPI Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Evaluations Conducted</span>
             <Award className="w-4 h-4 text-emerald-400" />
           </div>
-          <p className="text-2xl font-bold text-white mt-2">{totalCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Average score: <strong className="text-emerald-400">{avgScore} / 100</strong></p>
+          <p className="text-2xl font-bold text-[#F6F3EA] mt-2">{totalCount}</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Average score: <strong className="text-emerald-400">{avgScore} / 100</strong></p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Proficient (80%+)</span>
             <CheckCircle className="w-4 h-4 text-emerald-400" />
           </div>
           <p className="text-2xl font-bold text-emerald-400 mt-2">{proficientCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">
             {totalCount > 0 ? `${Math.round((proficientCount / totalCount) * 100)}% mastery rate` : 'No records'}
           </p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Competent (60-79%)</span>
-            <TrendingUp className="w-4 h-4 text-sky-400" />
+            <TrendingUp className="w-4 h-4 text-[#9BAE9C]" />
           </div>
-          <p className="text-2xl font-bold text-sky-400 mt-2">{competentCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Ready for next skill tier</p>
+          <p className="text-2xl font-bold text-[#9BAE9C] mt-2">{competentCount}</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Ready for next skill tier</p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Remedial Practice</span>
             <AlertTriangle className="w-4 h-4 text-amber-400" />
           </div>
           <p className="text-2xl font-bold text-amber-400 mt-2">{remedialCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Targeted intervention needed</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Targeted intervention needed</p>
         </div>
       </div>
 
       {/* Main Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+      <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-850/80 text-slate-400 uppercase text-[10px] font-semibold tracking-wider border-b border-slate-800">
+          <table className="w-full text-left text-xs text-[#F6F3EA]">
+            <thead className="bg-[#202822] text-[#9BAE9C] uppercase text-[10px] font-semibold tracking-wider border-b border-[#3D4A41]">
               <tr>
                 <th className="px-4 py-3.5">Date</th>
                 <th className="px-4 py-3.5">Class</th>
@@ -435,48 +531,55 @@ export const PracticalProgressView: React.FC = () => {
                 <th className="px-4 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/80">
+            <tbody className="divide-y divide-[#3D4A41]/80">
               {isLoading ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={11} className="px-4 py-12 text-center text-[#9BAE9C]">
                     Loading practical progress records...
                   </td>
                 </tr>
               ) : filteredRecords.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
-                    No assessment records found for this filter. Click "Add Assessment" to log student skill trials.
+                  <td colSpan={11} className="px-4 py-16 text-center text-[#9BAE9C]">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <Award className="w-9 h-9 text-[#9BAE9C]/60 mb-1" />
+                      <p className="text-[#F6F3EA] font-semibold text-sm">No practical skill assessments recorded yet</p>
+                      <p className="text-xs text-[#9BAE9C] max-w-md">
+                        This module is clean and ready. Click "New Practical Assessment" to record individual student hands-on evaluations linked to your imported Student Master Roster.
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : (
                 filteredRecords.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-850/50 transition-colors">
-                    <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-slate-400">
+                  <tr key={item.id} className="hover:bg-[#344038]/50 transition-colors duration-150">
+                    <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-[#9BAE9C]">
                       {item.assessmentDate}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span
-                        className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          item.class === 'Class 7'
-                            ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
-                            : item.class === 'Class 8'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30'
-                        }`}
+                        className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${getClassBadgeColor(item.class)}`}
                       >
                         {item.class}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono font-bold text-white whitespace-nowrap">
+                    <td className="px-4 py-3 font-mono font-bold text-[#F6F3EA] whitespace-nowrap">
                       {item.registrationId}
                     </td>
-                    <td className="px-4 py-3 font-medium text-white whitespace-nowrap">
-                      {item.studentName}
+                    <td className="px-4 py-3 font-medium text-[#F6F3EA] whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenStudentDetail(item)}
+                        className="btn-interactive font-medium text-[#F6F3EA] hover:text-[#D97745] hover:underline text-left inline-flex items-center gap-1.5 transition-colors group cursor-pointer"
+                        title="Click to view comprehensive student profile & history"
+                      >
+                        <span>{item.studentName}</span>
+                      </button>
                     </td>
-                    <td className="px-4 py-3 text-slate-200 max-w-[200px] truncate" title={item.skillTask}>
+                    <td className="px-4 py-3 text-[#CCD6CD] max-w-[200px] truncate" title={item.skillTask}>
                       {item.skillTask}
                     </td>
-                    <td className="px-4 py-3 text-center whitespace-nowrap font-mono">
+                    <td className="px-4 py-3 text-center whitespace-nowrap font-mono text-[#9BAE9C]">
                       #{item.attemptNumber}
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
@@ -486,13 +589,13 @@ export const PracticalProgressView: React.FC = () => {
                             item.scoreMarks >= 80
                               ? 'text-emerald-400'
                               : item.scoreMarks >= 60
-                              ? 'text-sky-400'
+                              ? 'text-[#9BAE9C]'
                               : 'text-amber-400'
                           }
                         >
                           {item.scoreMarks}
                         </span>
-                        <span className="text-[10px] text-slate-600">/100</span>
+                        <span className="text-[10px] text-[#9BAE9C]/60">/100</span>
                       </div>
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
@@ -501,16 +604,16 @@ export const PracticalProgressView: React.FC = () => {
                           item.skillStatus === 'Proficient'
                             ? 'bg-emerald-950/60 text-emerald-400 border-emerald-800'
                             : item.skillStatus === 'Competent'
-                            ? 'bg-sky-950/60 text-sky-400 border-sky-800'
+                            ? 'bg-[#9BAE9C]/15 text-[#9BAE9C] border-[#9BAE9C]/30'
                             : item.skillStatus === 'Needs Improvement'
                             ? 'bg-rose-950/60 text-rose-400 border-rose-800'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                            : 'bg-[#202822] text-[#9BAE9C] border-[#3D4A41]'
                         }`}
                       >
                         {item.skillStatus}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-400 max-w-[150px] truncate" title={item.weakArea || 'None'}>
+                    <td className="px-4 py-3 text-[#9BAE9C] max-w-[150px] truncate" title={item.weakArea || 'None'}>
                       {item.weakArea || '—'}
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
@@ -518,7 +621,7 @@ export const PracticalProgressView: React.FC = () => {
                         className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-semibold ${
                           item.remedialPracticeRequired === 'Yes'
                             ? 'bg-amber-950/60 text-amber-400 border border-amber-800/80'
-                            : 'bg-slate-800 text-slate-400'
+                            : 'bg-[#202822] text-[#9BAE9C] border border-[#3D4A41]'
                         }`}
                       >
                         {item.remedialPracticeRequired}
@@ -528,25 +631,29 @@ export const PracticalProgressView: React.FC = () => {
                       <div className="flex items-center justify-end gap-1.5">
                         <button
                           onClick={() => setSelectedDetail(item)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition"
+                          className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-[#D97745] hover:bg-[#202822] cursor-pointer"
                           title="View Details"
                         >
                           <FileText className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          onClick={() => handleOpenEdit(item)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition"
-                          title="Edit"
-                        >
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(item.id)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {permissions.canEdit && (
+                          <button
+                            onClick={() => handleOpenEdit(item)}
+                            className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-[#F6F3EA] hover:bg-[#202822] cursor-pointer"
+                            title="Edit"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {permissions.canDelete && (
+                          <button
+                            onClick={() => handleDelete(item.id)}
+                            className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-rose-400 hover:bg-[#202822] cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -559,18 +666,18 @@ export const PracticalProgressView: React.FC = () => {
 
       {/* Add / Edit Assessment Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1A211C]/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col animate-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-[#3D4A41] flex items-center justify-between sticky top-0 bg-[#2B352E] z-10">
               <div className="flex items-center gap-2">
                 <Award className="w-5 h-5 text-emerald-400" />
-                <h3 className="font-bold text-white text-sm">
+                <h3 className="font-bold text-[#F6F3EA] text-sm">
                   {editingEntry ? 'Edit Practical Assessment' : 'New Practical Skill Assessment'}
                 </h3>
               </div>
               <button
                 onClick={() => setIsFormOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="btn-interactive text-[#9BAE9C] hover:text-[#F6F3EA] p-1 rounded-lg hover:bg-[#202822] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -585,36 +692,38 @@ export const PracticalProgressView: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Assessment Date</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Assessment Date</label>
                   <input
                     type="date"
                     required
                     value={formDate}
                     onChange={(e) => setFormDate(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Class</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Class</label>
                   <select
                     value={formClass}
                     onChange={(e) => handleClassChangeInForm(e.target.value as ClassLevel)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
-                    <option value="Class 7">Class 7th</option>
-                    <option value="Class 8">Class 8th</option>
-                    <option value="Class 9">Class 9th</option>
+                    {availableClasses.map((cls) => (
+                      <option key={cls} value={cls}>
+                        {cls}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
 
               {/* Student Picker */}
-              <div className="bg-slate-850 p-3 rounded-xl border border-slate-800 space-y-2">
-                <label className="block text-slate-300 text-xs font-medium">Select Student</label>
+              <div className="bg-[#202822] p-3 rounded-xl border border-[#3D4A41] space-y-2">
+                <label className="block text-[#CCD6CD] text-xs font-medium">Select Student</label>
                 <select
                   value={formStudentId}
                   onChange={(e) => handleStudentSelect(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-[#2B352E] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 >
                   <option value="">-- Choose student from {formClass} --</option>
                   {allStudents
@@ -626,27 +735,36 @@ export const PracticalProgressView: React.FC = () => {
                     ))}
                 </select>
 
+                {allStudents.filter((s) => s.class === formClass).length === 0 && (
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-300 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>
+                      No active students found in <strong>{formClass}</strong> in the Student Master Roster. Import roster excel sheet first.
+                    </span>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-2 text-xs pt-1">
                   <div>
-                    <label className="text-slate-400 text-[11px] block">Student Name</label>
+                    <label className="text-[#9BAE9C] text-[11px] block">Student Name</label>
                     <input
                       type="text"
                       required
                       value={formStudentName}
                       onChange={(e) => setFormStudentName(e.target.value)}
                       placeholder="Student full name"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white"
+                      className="w-full bg-[#2B352E] border border-[#3D4A41] rounded-lg px-2.5 py-1 text-xs text-[#F6F3EA]"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 text-[11px] block">Roll / Reg #</label>
+                    <label className="text-[#9BAE9C] text-[11px] block">Roll / Reg #</label>
                     <input
                       type="text"
                       required
                       value={formRegistrationId}
                       onChange={(e) => setFormRegistrationId(e.target.value)}
                       placeholder="Roll or reg number"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono"
+                      className="w-full bg-[#2B352E] border border-[#3D4A41] rounded-lg px-2.5 py-1 text-xs text-[#F6F3EA] font-mono"
                     />
                   </div>
                 </div>
@@ -654,36 +772,36 @@ export const PracticalProgressView: React.FC = () => {
 
               {/* Task & Attempt */}
               <div>
-                <label className="block text-slate-400 text-xs font-medium mb-1">Skill / Practical Task</label>
+                <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Skill / Practical Task</label>
                 <input
                   type="text"
                   required
                   placeholder="e.g. Touch Typing 25 WPM, Excel Marksheet Formulas, Windows Navigation"
                   value={formSkillTask}
                   onChange={(e) => setFormSkillTask(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Attempt #</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Attempt #</label>
                   <input
                     type="number"
                     min="1"
                     max="10"
                     value={formAttemptNumber}
                     onChange={(e) => setFormAttemptNumber(Number(e.target.value))}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white font-mono"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Completed?</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Completed?</label>
                   <select
                     value={formPracticalCompleted}
                     onChange={(e) => setFormPracticalCompleted(e.target.value as any)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="Yes">Yes (Completed)</option>
                     <option value="No">No</option>
@@ -692,25 +810,25 @@ export const PracticalProgressView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Score / Marks (0-100)</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Score / Marks (0-100)</label>
                   <input
                     type="number"
                     min="0"
                     max="100"
                     value={formScoreMarks}
                     onChange={(e) => handleScoreChange(Number(e.target.value))}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-emerald-400 font-bold font-mono"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-emerald-400 font-bold font-mono"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Skill Status</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Skill Status</label>
                   <select
                     value={formSkillStatus}
                     onChange={(e) => setFormSkillStatus(e.target.value as any)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="Proficient">Proficient (&gt;=80)</option>
                     <option value="Competent">Competent (60-79)</option>
@@ -720,11 +838,11 @@ export const PracticalProgressView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Remedial Required?</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Remedial Required?</label>
                   <select
                     value={formRemedialRequired}
                     onChange={(e) => setFormRemedialRequired(e.target.value as any)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="No">No Remedial Practice</option>
                     <option value="Yes">Yes — Extra Lab Practice Needed</option>
@@ -733,39 +851,39 @@ export const PracticalProgressView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-400 text-xs font-medium mb-1">Weak Area (Optional)</label>
+                <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Weak Area (Optional)</label>
                 <input
                   type="text"
                   placeholder="e.g. Right-hand numeric typing speed, nested formula brackets"
                   value={formWeakArea}
                   onChange={(e) => setFormWeakArea(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-400 text-xs font-medium mb-1">Instructor Remarks</label>
+                <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Instructor Remarks</label>
                 <textarea
                   rows={2}
                   placeholder="Evaluation notes, feedback, and target goals..."
                   value={formInstructorRemarks}
                   onChange={(e) => setFormInstructorRemarks(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#3D4A41]">
                 <button
                   type="button"
                   onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                  className="btn-interactive px-4 py-2 rounded-xl text-xs font-semibold text-[#9BAE9C] hover:text-[#F6F3EA] hover:bg-[#202822] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-md disabled:opacity-40"
+                  className="btn-interactive px-5 py-2 rounded-xl text-xs font-semibold bg-[#D97745] hover:bg-[#c26535] text-white shadow-sm shadow-[#D97745]/20 cursor-pointer disabled:opacity-40"
                 >
                   {isSubmitting ? 'Saving...' : editingEntry ? 'Update Assessment' : 'Save Assessment'}
                 </button>
@@ -777,26 +895,26 @@ export const PracticalProgressView: React.FC = () => {
 
       {/* Details Modal */}
       {selectedDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1A211C]/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#3D4A41]">
               <div className="flex items-center gap-2">
                 <Award className="w-5 h-5 text-emerald-400" />
-                <h3 className="font-bold text-white text-sm">Skill Evaluation Record</h3>
+                <h3 className="font-bold text-[#F6F3EA] text-sm">Skill Evaluation Record</h3>
               </div>
               <button
                 onClick={() => setSelectedDetail(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="btn-interactive text-[#9BAE9C] hover:text-[#F6F3EA] p-1 rounded-lg hover:bg-[#202822] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
-              <div className="bg-slate-850 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
+              <div className="bg-[#202822] p-3 rounded-xl border border-[#3D4A41] flex justify-between items-center">
                 <div>
-                  <div className="font-bold text-white text-sm">{selectedDetail.studentName}</div>
-                  <div className="text-[11px] text-slate-400">
+                  <div className="font-bold text-[#F6F3EA] text-sm">{selectedDetail.studentName}</div>
+                  <div className="text-[11px] text-[#9BAE9C]">
                     Roll #{selectedDetail.registrationId} • {selectedDetail.class}
                   </div>
                 </div>
@@ -807,7 +925,7 @@ export const PracticalProgressView: React.FC = () => {
                       selectedDetail.skillStatus === 'Proficient'
                         ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
                         : selectedDetail.skillStatus === 'Competent'
-                        ? 'bg-sky-950 text-sky-400 border border-sky-800'
+                        ? 'bg-[#9BAE9C]/20 text-[#9BAE9C] border border-[#9BAE9C]/30'
                         : 'bg-rose-950 text-rose-400 border border-rose-800'
                     }`}
                   >
@@ -817,28 +935,28 @@ export const PracticalProgressView: React.FC = () => {
               </div>
 
               <div>
-                <span className="text-slate-400 block font-medium">Assessed Task:</span>
-                <p className="text-white font-semibold mt-0.5">{selectedDetail.skillTask}</p>
+                <span className="text-[#9BAE9C] block font-medium">Assessed Task:</span>
+                <p className="text-[#F6F3EA] font-semibold mt-0.5">{selectedDetail.skillTask}</p>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 bg-slate-850 p-2.5 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-2 gap-2 bg-[#202822] p-2.5 rounded-xl border border-[#3D4A41]">
                 <div>
-                  <span className="text-slate-400 text-[11px]">Assessment Date:</span>
-                  <p className="font-medium text-slate-200">{selectedDetail.assessmentDate}</p>
+                  <span className="text-[#9BAE9C] text-[11px]">Assessment Date:</span>
+                  <p className="font-medium text-[#CCD6CD]">{selectedDetail.assessmentDate}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Attempt Number:</span>
-                  <p className="font-medium text-slate-200">Attempt #{selectedDetail.attemptNumber}</p>
+                  <span className="text-[#9BAE9C] text-[11px]">Attempt Number:</span>
+                  <p className="font-medium text-[#CCD6CD]">Attempt #{selectedDetail.attemptNumber}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Completed Status:</span>
+                  <span className="text-[#9BAE9C] text-[11px]">Completed Status:</span>
                   <p className="font-medium text-emerald-400">{selectedDetail.practicalCompleted}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Remedial Practice:</span>
+                  <span className="text-[#9BAE9C] text-[11px]">Remedial Practice:</span>
                   <p
                     className={`font-semibold ${
-                      selectedDetail.remedialPracticeRequired === 'Yes' ? 'text-amber-400' : 'text-slate-300'
+                      selectedDetail.remedialPracticeRequired === 'Yes' ? 'text-amber-400' : 'text-[#CCD6CD]'
                     }`}
                   >
                     {selectedDetail.remedialPracticeRequired}
@@ -848,15 +966,15 @@ export const PracticalProgressView: React.FC = () => {
 
               {selectedDetail.weakArea && (
                 <div>
-                  <span className="text-slate-400 block font-medium">Identified Weak Area:</span>
+                  <span className="text-[#9BAE9C] block font-medium">Identified Weak Area:</span>
                   <p className="text-amber-300 mt-0.5">{selectedDetail.weakArea}</p>
                 </div>
               )}
 
               {selectedDetail.instructorRemarks && (
                 <div>
-                  <span className="text-slate-400 block font-medium">Instructor Remarks:</span>
-                  <p className="text-slate-200 mt-0.5">{selectedDetail.instructorRemarks}</p>
+                  <span className="text-[#9BAE9C] block font-medium">Instructor Remarks:</span>
+                  <p className="text-[#CCD6CD] mt-0.5">{selectedDetail.instructorRemarks}</p>
                 </div>
               )}
             </div>
@@ -864,7 +982,7 @@ export const PracticalProgressView: React.FC = () => {
             <div className="pt-2 flex justify-end">
               <button
                 onClick={() => setSelectedDetail(null)}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
+                className="btn-interactive px-4 py-1.5 rounded-xl text-xs font-semibold bg-[#202822] text-[#F6F3EA] hover:bg-[#344038] border border-[#3D4A41] cursor-pointer"
               >
                 Close
               </button>
@@ -872,6 +990,38 @@ export const PracticalProgressView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Student Profile & History Modal */}
+      {selectedStudentForModal && (
+        <StudentDetailModal
+          student={selectedStudentForModal}
+          onClose={() => setSelectedStudentForModal(null)}
+          onOpenWhatsAppAlert={(s) => setWhatsAppStudent(s)}
+        />
+      )}
+
+      {/* WhatsApp Quick Alert Modal */}
+      {whatsAppStudent && (
+        <WhatsAppAlertModal
+          isOpen={Boolean(whatsAppStudent)}
+          onClose={() => setWhatsAppStudent(null)}
+          studentName={whatsAppStudent.name}
+          rollNo={whatsAppStudent.rollNo}
+          classLevel={whatsAppStudent.class}
+          guardianPhone={whatsAppStudent.guardianContact || whatsAppStudent.phone || ''}
+          date={new Date().toISOString().split('T')[0]}
+          absenceCount={1}
+          reason="Practical assessment inquiry"
+        />
+      )}
+
+      {/* Bulk Import Modal */}
+      <ModuleImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        initialModuleType="practical"
+        onImportComplete={loadData}
+      />
     </div>
   );
 };

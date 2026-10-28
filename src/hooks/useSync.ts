@@ -14,9 +14,13 @@ const initialStats: SyncStats = {
 };
 
 export function useSync() {
-  const [stats, setStats] = useState<SyncStats>(initialStats);
+  const [stats, setStats] = useState<SyncStats>(() => syncEngine.getCachedStats());
 
   useEffect(() => {
+    syncEngine.getStats().then((fresh) => {
+      setStats(fresh);
+    });
+
     const unsubscribe = syncEngine.subscribe((newStats) => {
       setStats(newStats);
     });
@@ -33,9 +37,29 @@ export function useSync() {
     await syncEngine.retryAllFailed();
   };
 
+  const uploadWorkspaceToCloud = async (ownerId?: string) => {
+    return syncEngine.uploadActiveWorkspaceToCloud(ownerId);
+  };
+
+  const downloadWorkspaceFromCloud = async (ownerId?: string) => {
+    return syncEngine.downloadActiveWorkspaceFromCloud(ownerId);
+  };
+
+  const resyncOperation = async (opId: string) => {
+    return syncEngine.resyncOperation(opId);
+  };
+
+  const verifySyncedOperations = async () => {
+    return syncEngine.verifyAndReconcileSyncedOperations();
+  };
+
   return {
     ...stats,
     triggerSync,
     retryAll,
+    uploadWorkspaceToCloud,
+    downloadWorkspaceFromCloud,
+    resyncOperation,
+    verifySyncedOperations,
   };
 }

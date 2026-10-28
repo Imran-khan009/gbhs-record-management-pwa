@@ -4,7 +4,7 @@ export interface TeachingLogEntry {
   id: string; // UUID
   date: string; // YYYY-MM-DD
   day: string; // Monday, Tuesday, etc.
-  class: ClassLevel; // Class 7 | Class 8 | Class 9
+  class: ClassLevel; // Class 1 to Class 10
   subjectTopic: string;
   learningObjectives: string;
   theoryCovered: string;
@@ -18,6 +18,8 @@ export interface TeachingLogEntry {
   evidenceFileName?: string;
   nextLesson?: string;
   instructorName: string;
+  owner_id?: string;
+  ownerId?: string;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -32,7 +34,7 @@ export interface PracticalProgressEntry {
   studentId?: string;
   registrationId: string; // Roll No or Admission No
   studentName: string;
-  class: ClassLevel; // Class 7 | Class 8 | Class 9
+  class: ClassLevel; // Class 1 to Class 10
   skillTask: string; // e.g. Typing Speed, MS Word, Excel Formulas
   attemptNumber: number; // 1, 2, 3...
   practicalCompleted: PracticalCompletedStatus;
@@ -43,6 +45,8 @@ export interface PracticalProgressEntry {
   reassessmentDate?: string;
   evidenceFile?: string;
   instructorRemarks?: string;
+  owner_id?: string;
+  ownerId?: string;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -56,7 +60,7 @@ export interface AbsenteeFollowupEntry {
   studentId?: string;
   registrationId: string; // Roll No or Admission No
   studentName: string;
-  class: ClassLevel; // Class 7 | Class 8 | Class 9
+  class: ClassLevel; // Class 1 to Class 10
   absenceCount: number; // Consecutive or total days absent
   followupReason: string; // Illness, Family Emergency, Village visit, etc.
   actionTaken: string; // Phone Call, Home Visit, WhatsApp notice
@@ -67,6 +71,8 @@ export interface AbsenteeFollowupEntry {
   currentStatus: FollowupStatus;
   managementReferral: 'Yes' | 'No';
   remarks?: string;
+  owner_id?: string;
+  ownerId?: string;
   version: number;
   createdAt: string;
   updatedAt: string;

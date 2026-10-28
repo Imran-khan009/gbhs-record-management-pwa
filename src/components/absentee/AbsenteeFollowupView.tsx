@@ -9,6 +9,9 @@ import {
   exportAbsenteeFollowupsToExcel,
 } from '../../services/modulesService';
 import { getAllStudents } from '../../services/db';
+import { useAuth } from '../../context/AuthContext';
+import { getWorkspacePermissions } from '../../services/permissionService';
+import { useSchoolProfile } from '../../services/schoolProfileService';
 import { ClassTabs, ClassFilter } from '../common/ClassTabs';
 import {
   UserX,
@@ -27,9 +30,25 @@ import {
   ShieldAlert,
   ArrowRight,
   MessageSquare,
+  MessageCircle,
+  Download,
+  Upload,
 } from 'lucide-react';
+import { WhatsAppAlertModal } from './WhatsAppAlertModal';
+import { StudentDetailModal } from '../students/StudentDetailModal';
+import { downloadAbsenteeFollowupTemplate } from '../../services/bulkModuleImportService';
+import { ModuleImportModal } from '../import/ModuleImportModal';
+import { DEFAULT_CLASSES, sanitizeClasses, sortClasses } from '../../services/schoolProfileService';
+import { getClassBadgeColor } from '../../services/classNormalizationService';
 
 export const AbsenteeFollowupView: React.FC = () => {
+  const { session } = useAuth();
+  const permissions = getWorkspacePermissions(session?.user);
+  const { profile } = useSchoolProfile(session?.user?.workspaceOwnerId || session?.user?.id);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+
+  const availableClasses = sortClasses(sanitizeClasses(profile.classes));
+
   const [followups, setFollowups] = useState<AbsenteeFollowupEntry[]>([]);
   const [allStudents, setAllStudents] = useState<Student[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -37,21 +56,28 @@ export const AbsenteeFollowupView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'All' | FollowupStatus>('All');
   const [referralFilter, setReferralFilter] = useState<'All' | 'Yes' | 'No'>('All');
-  const [classCounts, setClassCounts] = useState<{ all: number; class7: number; class8: number; class9: number }>({
+  const [classCounts, setClassCounts] = useState<{ all: number; [key: string]: number }>({
     all: 0,
-    class7: 0,
-    class8: 0,
-    class9: 0,
   });
 
   // Modal states
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<AbsenteeFollowupEntry | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<AbsenteeFollowupEntry | null>(null);
+  const [whatsAppAlertTarget, setWhatsAppAlertTarget] = useState<{
+    studentName: string;
+    rollNo: string;
+    classLevel: string;
+    phone: string;
+    date: string;
+    absenceCount: number;
+    reason: string;
+  } | null>(null);
+  const [selectedStudentForProfile, setSelectedStudentForProfile] = useState<Student | null>(null);
 
   // Form Fields
   const [formDate, setFormDate] = useState(new Date().toISOString().split('T')[0]);
-  const [formClass, setFormClass] = useState<ClassLevel>('Class 7');
+  const [formClass, setFormClass] = useState<ClassLevel>(() => availableClasses[0] || 'Class 1');
   const [formStudentId, setFormStudentId] = useState('');
   const [formStudentName, setFormStudentName] = useState('');
   const [formRegistrationId, setFormRegistrationId] = useState('');
@@ -79,12 +105,16 @@ export const AbsenteeFollowupView: React.FC = () => {
       setAllStudents(students);
 
       const all = await fetchAbsenteeFollowups('All');
-      setClassCounts({
-        all: all.length,
-        class7: all.filter((f) => f.class === 'Class 7').length,
-        class8: all.filter((f) => f.class === 'Class 8').length,
-        class9: all.filter((f) => f.class === 'Class 9').length,
+      const dynamicCounts: Record<string, number> = { all: all.length };
+      availableClasses.forEach((cls) => {
+        const normCls = cls.trim().toLowerCase().replace(/\s+/g, ' ');
+        const count = all.filter((f) => (f.class || '').trim().toLowerCase().replace(/\s+/g, ' ') === normCls).length;
+        dynamicCounts[cls] = count;
+        const rawKey = cls.toLowerCase().replace(/[\s_-]+/g, '');
+        dynamicCounts[rawKey] = count;
       });
+
+      setClassCounts(dynamicCounts as any);
     } catch (err) {
       console.error('Failed to load absentee follow-ups:', err);
     } finally {
@@ -94,61 +124,94 @@ export const AbsenteeFollowupView: React.FC = () => {
 
   useEffect(() => {
     loadData();
+    const handleReactivity = () => {
+      loadData();
+    };
+    window.addEventListener('gbhs_records_imported', handleReactivity);
+    window.addEventListener('gbhs_absentee_changed', handleReactivity);
+    return () => {
+      window.removeEventListener('gbhs_records_imported', handleReactivity);
+      window.removeEventListener('gbhs_absentee_changed', handleReactivity);
+    };
   }, [selectedClass]);
+
+  const handleOpenWhatsAppAlert = (item: AbsenteeFollowupEntry) => {
+    const student = allStudents.find((s) => s.id === item.studentId || s.rollNo === item.registrationId);
+    const phone = student?.guardianContact || student?.phone || (item.contactPerson.match(/\d{10,13}/)?.[0] || '');
+    setWhatsAppAlertTarget({
+      studentName: item.studentName,
+      rollNo: item.registrationId,
+      classLevel: item.class,
+      phone,
+      date: item.date,
+      absenceCount: item.absenceCount || 1,
+      reason: item.followupReason || 'Absent from school',
+    });
+  };
+
+  const handleOpenStudentProfile = (item: AbsenteeFollowupEntry) => {
+    const student = allStudents.find((s) => s.id === item.studentId || s.rollNo === item.registrationId);
+    if (student) {
+      setSelectedStudentForProfile(student);
+    } else {
+      setSelectedStudentForProfile({
+        id: item.studentId || 'unknown',
+        rollNo: item.registrationId,
+        admissionNo: item.registrationId,
+        name: item.studentName,
+        fatherName: item.contactPerson || 'Guardian',
+        class: item.class as any,
+        section: 'A',
+        status: 'Active',
+        phone: '',
+        version: 1,
+        updatedAt: item.date,
+        createdAt: item.date,
+        schoolId: 'GBHS-MAIN',
+        createdBy: 'system',
+      });
+    }
+  };
 
   const handleClassChangeInForm = (cls: ClassLevel) => {
     setFormClass(cls);
-    const studentsInClass = allStudents.filter((s) => s.class === cls);
-    if (studentsInClass.length > 0) {
-      const first = studentsInClass[0];
-      setFormStudentId(first.id);
-      setFormStudentName(first.name);
-      setFormRegistrationId(first.rollNo || first.admissionNo);
-      setFormContactPerson(
-        first.fatherName ? `Father (${first.fatherName})` : 'Guardian'
-      );
-    } else {
-      setFormStudentId('');
-      setFormStudentName('');
-      setFormRegistrationId('');
-      setFormContactPerson('Guardian');
-    }
+    setFormStudentId('');
+    setFormStudentName('');
+    setFormRegistrationId('');
+    setFormContactPerson('');
   };
 
   const handleStudentSelect = (studentId: string) => {
     setFormStudentId(studentId);
+    if (!studentId) {
+      setFormStudentName('');
+      setFormRegistrationId('');
+      setFormContactPerson('');
+      return;
+    }
     const found = allStudents.find((s) => s.id === studentId);
     if (found) {
       setFormStudentName(found.name);
       setFormRegistrationId(found.rollNo || found.admissionNo);
+      const phoneInfo = found.phone ? ` [Phone: ${found.phone}]` : '';
       setFormContactPerson(
-        found.fatherName ? `Father (${found.fatherName})` : 'Guardian'
+        found.fatherName ? `Father (${found.fatherName})${phoneInfo}` : `Guardian${phoneInfo}`
       );
     }
   };
 
   const handleOpenCreate = () => {
+    if (permissions.isReadOnly) return;
     setEditingEntry(null);
     setFormDate(new Date().toISOString().split('T')[0]);
-    const defaultCls = selectedClass !== 'All' ? selectedClass : 'Class 7';
+    const defaultCls = selectedClass !== 'All' ? selectedClass : (availableClasses[0] || 'Class 1');
     setFormClass(defaultCls);
+    setFormStudentId('');
+    setFormStudentName('');
+    setFormRegistrationId('');
+    setFormContactPerson('');
 
-    const studentsInClass = allStudents.filter((s) => s.class === defaultCls);
-    if (studentsInClass.length > 0) {
-      setFormStudentId(studentsInClass[0].id);
-      setFormStudentName(studentsInClass[0].name);
-      setFormRegistrationId(studentsInClass[0].rollNo || studentsInClass[0].admissionNo);
-      setFormContactPerson(
-        studentsInClass[0].fatherName ? `Father (${studentsInClass[0].fatherName})` : 'Father'
-      );
-    } else {
-      setFormStudentId('');
-      setFormStudentName('');
-      setFormRegistrationId('');
-      setFormContactPerson('Guardian');
-    }
-
-    setFormAbsenceCount(2);
+    setFormAbsenceCount(1);
     setFormFollowupReason('Illness / Medical');
     setFormActionTaken('Phone Call to Guardian');
     setFormResponseReceived('');
@@ -164,6 +227,7 @@ export const AbsenteeFollowupView: React.FC = () => {
   };
 
   const handleOpenEdit = (entry: AbsenteeFollowupEntry) => {
+    if (permissions.isReadOnly) return;
     setEditingEntry(entry);
     setFormDate(entry.date);
     setFormClass(entry.class);
@@ -186,8 +250,8 @@ export const AbsenteeFollowupView: React.FC = () => {
 
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formStudentName.trim()) {
-      setFormError('Please select or specify student name.');
+    if (!formStudentId || !formStudentName.trim()) {
+      setFormError('Please select a student from the Student Master Roster.');
       return;
     }
     if (!formResponseReceived.trim()) {
@@ -249,6 +313,7 @@ export const AbsenteeFollowupView: React.FC = () => {
   };
 
   const handleQuickResolve = async (entry: AbsenteeFollowupEntry) => {
+    if (permissions.isReadOnly) return;
     await updateAbsenteeFollowup(entry.id, {
       currentStatus: 'Resolved / Returned',
       remarks: (entry.remarks ? entry.remarks + ' | ' : '') + 'Returned to class on ' + new Date().toISOString().split('T')[0],
@@ -257,6 +322,7 @@ export const AbsenteeFollowupView: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
+    if (permissions.isReadOnly) return;
     if (window.confirm('Are you sure you want to delete this absentee follow-up record?')) {
       await deleteAbsenteeFollowup(id);
       await loadData();
@@ -309,38 +375,74 @@ export const AbsenteeFollowupView: React.FC = () => {
 
         <div className="flex items-center gap-2.5">
           <button
-            onClick={() => exportAbsenteeFollowupsToExcel(filteredFollowups, selectedClass)}
-            disabled={filteredFollowups.length === 0}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-850 hover:bg-slate-800 text-slate-200 border border-slate-700/80 transition cursor-pointer disabled:opacity-40"
+            type="button"
+            onClick={() => downloadAbsenteeFollowupTemplate({ classLevel: selectedClass, students: allStudents })}
+            className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#9BAE9C]/30 cursor-pointer"
+            title="Download Excel/CSV template for Absentee Follow-ups with Student Roster"
           >
-            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-            <span>Export Sheet</span>
+            <Download className="w-4 h-4 text-[#9BAE9C]" />
+            <span>Template</span>
           </button>
 
-          <button
-            onClick={handleOpenCreate}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-md shadow-amber-950/50 transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Log Follow-up</span>
-          </button>
+          {permissions.canAdd && (
+            <button
+              type="button"
+              onClick={() => setIsImportModalOpen(true)}
+              className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#9BAE9C]/30 cursor-pointer"
+              title="Bulk import absentee follow-up records from Excel or CSV"
+            >
+              <Upload className="w-4 h-4 text-[#D97745]" />
+              <span>Bulk Import</span>
+            </button>
+          )}
+
+          {permissions.canExport && (
+            <button
+              onClick={() => exportAbsenteeFollowupsToExcel(filteredFollowups, selectedClass)}
+              disabled={filteredFollowups.length === 0}
+              className="btn-interactive flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-[#2B352E] hover:bg-[#344038] text-[#F6F3EA] border border-[#9BAE9C]/30 cursor-pointer disabled:opacity-40"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-[#9BAE9C]" />
+              <span>Export Sheet</span>
+            </button>
+          )}
+
+          {permissions.canAdd && (
+            <button
+              onClick={handleOpenCreate}
+              className="btn-interactive flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-[#D97745] hover:bg-[#c26535] text-white shadow-sm shadow-[#D97745]/20 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Log Follow-up</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Class Switching Tabs & Filters */}
-      <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 bg-slate-900/60 p-2.5 rounded-2xl border border-slate-800">
-        <ClassTabs
-          selectedClass={selectedClass}
-          onSelectClass={setSelectedClass}
-          counts={classCounts}
-        />
+      {/* Read-Only Access Banner */}
+      {permissions.isReadOnly && (
+        <div className="p-3.5 rounded-xl border border-amber-800/80 bg-amber-950/40 text-xs text-amber-300 flex items-center gap-2.5">
+          <span>
+            <strong>Approved Staff Access (Read & Export):</strong> You are viewing absentee follow-up records in this shared workspace with read and export permissions. Logging, editing, or deleting outreach can only be performed by the Workspace Owner.
+          </span>
+        </div>
+      )}
 
+      {/* Class Selector & Filters Toolbar */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 bg-[#2B352E]/60 p-2.5 rounded-2xl border border-[#3D4A41]">
         <div className="flex items-center gap-2 flex-wrap">
+          <ClassTabs
+            selectedClass={selectedClass}
+            onSelectClass={setSelectedClass}
+            classes={availableClasses}
+            counts={classCounts}
+          />
+
           {/* Status Filter */}
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="bg-slate-850 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-medium cursor-pointer"
+            className="btn-interactive bg-[#202822] border border-[#3D4A41] rounded-xl px-2.5 py-2 text-xs text-[#F6F3EA] font-medium cursor-pointer focus:outline-none focus:border-[#D97745] transition-colors duration-150"
           >
             <option value="All">All Resolution States</option>
             <option value="Pending Return">Pending Return</option>
@@ -353,71 +455,80 @@ export const AbsenteeFollowupView: React.FC = () => {
           <select
             value={referralFilter}
             onChange={(e) => setReferralFilter(e.target.value as any)}
-            className="bg-slate-850 border border-slate-700 rounded-xl px-2.5 py-1.5 text-xs text-slate-200 font-medium cursor-pointer"
+            className="btn-interactive bg-[#202822] border border-[#3D4A41] rounded-xl px-2.5 py-2 text-xs text-[#F6F3EA] font-medium cursor-pointer focus:outline-none focus:border-[#D97745] transition-colors duration-150"
           >
             <option value="All">All Referrals</option>
             <option value="Yes">Management Referral</option>
             <option value="No">No Referral</option>
           </select>
+        </div>
 
-          {/* Search */}
-          <div className="relative w-full sm:w-56">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search student or parent..."
-              className="w-full bg-slate-850 border border-slate-700/80 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-            />
-          </div>
+        {/* Search */}
+        <div className="relative w-full md:w-64">
+          <Search className="w-3.5 h-3.5 text-[#9BAE9C] absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search student or parent..."
+            className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl pl-8 pr-8 py-2 text-xs text-[#F6F3EA] placeholder-[#9BAE9C]/60 focus:outline-none focus:border-[#D97745] transition-colors duration-150"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              className="btn-interactive absolute right-2.5 top-1/2 -translate-y-1/2 text-[#9BAE9C] hover:text-[#F6F3EA]"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       </div>
 
       {/* KPI Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3.5">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Total Follow-up Cases</span>
             <UserX className="w-4 h-4 text-amber-400" />
           </div>
-          <p className="text-2xl font-bold text-white mt-2">{totalCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Contact cases documented</p>
+          <p className="text-2xl font-bold text-[#F6F3EA] mt-2">{totalCount}</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Contact cases documented</p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Pending Return</span>
             <Clock className="w-4 h-4 text-amber-400" />
           </div>
           <p className="text-2xl font-bold text-amber-400 mt-2">{pendingCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Students expected to resume</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Students expected to resume</p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Resolved / Returned</span>
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           </div>
           <p className="text-2xl font-bold text-emerald-400 mt-2">{resolvedCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Successfully rejoined classroom</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Successfully rejoined classroom</p>
         </div>
 
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-          <div className="flex items-center justify-between text-slate-400 text-xs font-medium">
+        <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl p-4 shadow-xs">
+          <div className="flex items-center justify-between text-[#9BAE9C] text-xs font-medium">
             <span>Headmaster Referral</span>
             <ShieldAlert className="w-4 h-4 text-rose-400" />
           </div>
           <p className="text-2xl font-bold text-rose-400 mt-2">{referralCount}</p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Administrative disciplinary cases</p>
+          <p className="text-[11px] text-[#9BAE9C] mt-0.5">Administrative disciplinary cases</p>
         </div>
       </div>
 
       {/* Main Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-sm">
+      <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl overflow-hidden shadow-xs">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-300">
-            <thead className="bg-slate-850/80 text-slate-400 uppercase text-[10px] font-semibold tracking-wider border-b border-slate-800">
+          <table className="w-full text-left text-xs text-[#F6F3EA]">
+            <thead className="bg-[#202822] text-[#9BAE9C] uppercase text-[10px] font-semibold tracking-wider border-b border-[#3D4A41]">
               <tr>
                 <th className="px-4 py-3.5">Date</th>
                 <th className="px-4 py-3.5">Class</th>
@@ -432,43 +543,50 @@ export const AbsenteeFollowupView: React.FC = () => {
                 <th className="px-4 py-3.5 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-800/80">
+            <tbody className="divide-y divide-[#3D4A41]/80">
               {isLoading ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
+                  <td colSpan={11} className="px-4 py-12 text-center text-[#9BAE9C]">
                     Loading absentee follow-ups...
                   </td>
                 </tr>
               ) : filteredFollowups.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-12 text-center text-slate-500">
-                    No absentee records found for this filter. Click "Log Follow-up" to record a guardian contact.
+                  <td colSpan={11} className="px-4 py-16 text-center text-[#9BAE9C]">
+                    <div className="flex flex-col items-center justify-center gap-2">
+                      <UserX className="w-9 h-9 text-[#9BAE9C]/60 mb-1" />
+                      <p className="text-[#F6F3EA] font-semibold text-sm">No absentee follow-ups recorded yet</p>
+                      <p className="text-xs text-[#9BAE9C] max-w-md">
+                        This module is clean and ready. Click "Log Follow-up" to record communication with parents/guardians linked strictly to your imported Student Master Roster.
+                      </p>
+                    </div>
                   </td>
                 </tr>
               ) : (
                 filteredFollowups.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-850/50 transition-colors">
-                    <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-slate-400">
+                  <tr key={item.id} className="hover:bg-[#344038]/50 transition-colors duration-150">
+                    <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-[#9BAE9C]">
                       {item.date}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <span
-                        className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          item.class === 'Class 7'
-                            ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
-                            : item.class === 'Class 8'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/30'
-                        }`}
+                        className={`inline-block text-[10px] font-bold px-2 py-0.5 rounded-full ${getClassBadgeColor(item.class)}`}
                       >
                         {item.class}
                       </span>
                     </td>
-                    <td className="px-4 py-3 font-mono font-bold text-white whitespace-nowrap">
+                    <td className="px-4 py-3 font-mono font-bold text-[#F6F3EA] whitespace-nowrap">
                       {item.registrationId}
                     </td>
-                    <td className="px-4 py-3 font-medium text-white whitespace-nowrap">
-                      {item.studentName}
+                    <td className="px-4 py-3 font-medium text-[#F6F3EA] whitespace-nowrap">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenStudentProfile(item)}
+                        className="btn-interactive font-medium text-[#F6F3EA] hover:text-[#D97745] hover:underline transition text-left cursor-pointer"
+                        title="Click to view complete student profile and attendance history"
+                      >
+                        {item.studentName}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-center whitespace-nowrap">
                       <span
@@ -481,16 +599,16 @@ export const AbsenteeFollowupView: React.FC = () => {
                         {item.absenceCount} Days
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-slate-300 max-w-[160px] truncate" title={item.followupReason}>
+                    <td className="px-4 py-3 text-[#CCD6CD] max-w-[160px] truncate" title={item.followupReason}>
                       {item.followupReason}
                     </td>
-                    <td className="px-4 py-3 text-slate-400 max-w-[150px] truncate" title={item.actionTaken}>
+                    <td className="px-4 py-3 text-[#9BAE9C] max-w-[150px] truncate" title={item.actionTaken}>
                       {item.actionTaken}
                     </td>
-                    <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
+                    <td className="px-4 py-3 text-[#CCD6CD] whitespace-nowrap">
                       {item.contactPerson}
                     </td>
-                    <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-slate-400">
+                    <td className="px-4 py-3 whitespace-nowrap font-mono text-[11px] text-[#9BAE9C]">
                       {item.expectedReturnDate || '—'}
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
@@ -502,7 +620,7 @@ export const AbsenteeFollowupView: React.FC = () => {
                             ? 'bg-amber-950/60 text-amber-400 border-amber-800'
                             : item.currentStatus === 'Escalated'
                             ? 'bg-rose-950/60 text-rose-400 border-rose-800'
-                            : 'bg-slate-800 text-slate-400 border-slate-700'
+                            : 'bg-[#202822] text-[#9BAE9C] border-[#3D4A41]'
                         }`}
                       >
                         {item.currentStatus}
@@ -510,37 +628,51 @@ export const AbsenteeFollowupView: React.FC = () => {
                     </td>
                     <td className="px-4 py-3 text-right whitespace-nowrap">
                       <div className="flex items-center justify-end gap-1.5">
-                        {item.currentStatus === 'Pending Return' && (
+                        {item.currentStatus === 'Pending Return' && permissions.canEdit && (
                           <button
                             onClick={() => handleQuickResolve(item)}
-                            className="px-2 py-1 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-400 border border-emerald-800/80 text-[10px] font-semibold flex items-center gap-1 transition"
+                            className="btn-interactive px-2 py-1 rounded bg-emerald-950/80 hover:bg-emerald-900 text-emerald-400 border border-emerald-800/80 text-[10px] font-semibold flex items-center gap-1 cursor-pointer"
                             title="Mark Student as Returned"
                           >
                             <CheckCircle2 className="w-3 h-3" />
                             <span>Returned</span>
                           </button>
                         )}
+                        {/* Direct WhatsApp Quick Alert */}
+                        <button
+                          type="button"
+                          onClick={() => handleOpenWhatsAppAlert(item)}
+                          className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-emerald-400 hover:bg-emerald-950/40 cursor-pointer"
+                          title="Send WhatsApp Quick Alert to Guardian"
+                        >
+                          <MessageCircle className="w-3.5 h-3.5 text-emerald-400" />
+                        </button>
+
                         <button
                           onClick={() => setSelectedDetail(item)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition"
+                          className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-[#D97745] hover:bg-[#202822] cursor-pointer"
                           title="View Details"
                         >
                           <FileText className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          onClick={() => handleOpenEdit(item)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-400 hover:bg-slate-800 transition"
-                          title="Edit"
-                        >
-                          <Edit className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(item.id)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-800 transition"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {permissions.canEdit && (
+                          <button
+                            onClick={() => handleOpenEdit(item)}
+                            className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-[#F6F3EA] hover:bg-[#202822] cursor-pointer"
+                            title="Edit"
+                          >
+                            <Edit className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {permissions.canDelete && (
+                          <button
+                            onClick={() => handleDelete(item.id)}
+                            className="btn-interactive p-1.5 rounded-lg text-[#9BAE9C] hover:text-rose-400 hover:bg-[#202822] cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -553,18 +685,18 @@ export const AbsenteeFollowupView: React.FC = () => {
 
       {/* Add / Edit Followup Modal */}
       {isFormOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between sticky top-0 bg-slate-900 z-10">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1A211C]/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col animate-in zoom-in-95 duration-150">
+            <div className="px-6 py-4 border-b border-[#3D4A41] flex items-center justify-between sticky top-0 bg-[#2B352E] z-10">
               <div className="flex items-center gap-2">
                 <UserX className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-white text-sm">
+                <h3 className="font-bold text-[#F6F3EA] text-sm">
                   {editingEntry ? 'Edit Absentee Follow-up' : 'Log Absentee Contact / Outreach'}
                 </h3>
               </div>
               <button
                 onClick={() => setIsFormOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="btn-interactive text-[#9BAE9C] hover:text-[#F6F3EA] p-1 rounded-lg hover:bg-[#202822] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -579,29 +711,31 @@ export const AbsenteeFollowupView: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Follow-up Date</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Follow-up Date</label>
                   <input
                     type="date"
                     required
                     value={formDate}
                     onChange={(e) => setFormDate(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Class</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Class</label>
                   <select
                     value={formClass}
                     onChange={(e) => handleClassChangeInForm(e.target.value as ClassLevel)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
-                    <option value="Class 7">Class 7th</option>
-                    <option value="Class 8">Class 8th</option>
-                    <option value="Class 9">Class 9th</option>
+                    {availableClasses.map((cls) => (
+                      <option key={cls} value={cls}>
+                        {cls}
+                      </option>
+                    ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Days Absent</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Days Absent</label>
                   <input
                     type="number"
                     min="1"
@@ -609,18 +743,18 @@ export const AbsenteeFollowupView: React.FC = () => {
                     required
                     value={formAbsenceCount}
                     onChange={(e) => setFormAbsenceCount(Number(e.target.value))}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-amber-400 font-bold font-mono"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-amber-400 font-bold font-mono"
                   />
                 </div>
               </div>
 
               {/* Student Picker */}
-              <div className="bg-slate-850 p-3 rounded-xl border border-slate-800 space-y-2">
-                <label className="block text-slate-300 text-xs font-medium">Select Student</label>
+              <div className="bg-[#202822] p-3 rounded-xl border border-[#3D4A41] space-y-2">
+                <label className="block text-[#CCD6CD] text-xs font-medium">Select Student</label>
                 <select
                   value={formStudentId}
                   onChange={(e) => handleStudentSelect(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                  className="w-full bg-[#2B352E] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 >
                   <option value="">-- Choose student from {formClass} --</option>
                   {allStudents
@@ -632,27 +766,36 @@ export const AbsenteeFollowupView: React.FC = () => {
                     ))}
                 </select>
 
+                {allStudents.filter((s) => s.class === formClass).length === 0 && (
+                  <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg text-amber-300 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span>
+                      No active students found in <strong>{formClass}</strong> in the Student Master Roster. Import roster excel sheet first.
+                    </span>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-2 gap-2 text-xs pt-1">
                   <div>
-                    <label className="text-slate-400 text-[11px] block">Student Name</label>
+                    <label className="text-[#9BAE9C] text-[11px] block">Student Name</label>
                     <input
                       type="text"
                       required
                       value={formStudentName}
                       onChange={(e) => setFormStudentName(e.target.value)}
                       placeholder="Student full name"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white"
+                      className="w-full bg-[#2B352E] border border-[#3D4A41] rounded-lg px-2.5 py-1 text-xs text-[#F6F3EA]"
                     />
                   </div>
                   <div>
-                    <label className="text-slate-400 text-[11px] block">Roll / Reg #</label>
+                    <label className="text-[#9BAE9C] text-[11px] block">Roll / Reg #</label>
                     <input
                       type="text"
                       required
                       value={formRegistrationId}
                       onChange={(e) => setFormRegistrationId(e.target.value)}
                       placeholder="Roll or reg number"
-                      className="w-full bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono"
+                      className="w-full bg-[#2B352E] border border-[#3D4A41] rounded-lg px-2.5 py-1 text-xs text-[#F6F3EA] font-mono"
                     />
                   </div>
                 </div>
@@ -660,11 +803,11 @@ export const AbsenteeFollowupView: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Reason for Absence</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Reason for Absence</label>
                   <select
                     value={formFollowupReason}
                     onChange={(e) => setFormFollowupReason(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="Illness / Medical">Illness / Medical</option>
                     <option value="Family Emergency">Family Emergency</option>
@@ -676,11 +819,11 @@ export const AbsenteeFollowupView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Action Taken</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Action Taken</label>
                   <select
                     value={formActionTaken}
                     onChange={(e) => setFormActionTaken(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="Phone Call to Guardian">Phone Call to Guardian</option>
                     <option value="WhatsApp Notification">WhatsApp Notification</option>
@@ -693,47 +836,47 @@ export const AbsenteeFollowupView: React.FC = () => {
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Contact Person</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Contact Person</label>
                   <input
                     type="text"
                     required
                     placeholder="e.g. Father (Mehrullah), Guardian"
                     value={formContactPerson}
                     onChange={(e) => setFormContactPerson(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Expected Return Date</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Expected Return Date</label>
                   <input
                     type="date"
                     value={formExpectedReturnDate}
                     onChange={(e) => setFormExpectedReturnDate(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-slate-400 text-xs font-medium mb-1">Response Received / Guardian Statement</label>
+                <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Response Received / Guardian Statement</label>
                 <textarea
                   rows={2}
                   required
                   placeholder="Summary of response from father/guardian..."
                   value={formResponseReceived}
                   onChange={(e) => setFormResponseReceived(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                  className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Current Status</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Current Status</label>
                   <select
                     value={formCurrentStatus}
                     onChange={(e) => setFormCurrentStatus(e.target.value as FollowupStatus)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="Pending Return">Pending Return</option>
                     <option value="Resolved / Returned">Resolved / Returned</option>
@@ -743,11 +886,11 @@ export const AbsenteeFollowupView: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-400 text-xs font-medium mb-1">Management Referral?</label>
+                  <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Management Referral?</label>
                   <select
                     value={formManagementReferral}
                     onChange={(e) => setFormManagementReferral(e.target.value as any)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-2 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                   >
                     <option value="No">No Referral Required</option>
                     <option value="Yes">Yes — Escalate to Headmaster</option>
@@ -756,28 +899,28 @@ export const AbsenteeFollowupView: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-400 text-xs font-medium mb-1">Remarks / Administrative Notes</label>
+                <label className="block text-[#9BAE9C] text-xs font-medium mb-1">Remarks / Administrative Notes</label>
                 <input
                   type="text"
                   placeholder="Optional counseling or administrative remarks..."
                   value={formRemarks}
                   onChange={(e) => setFormRemarks(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-500"
+                  className="w-full bg-[#202822] border border-[#3D4A41] rounded-xl px-3 py-1.5 text-xs text-[#F6F3EA] focus:outline-none focus:border-[#D97745]"
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-[#3D4A41]">
                 <button
                   type="button"
                   onClick={() => setIsFormOpen(false)}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-400 hover:text-white hover:bg-slate-800 transition"
+                  className="btn-interactive px-4 py-2 rounded-xl text-xs font-semibold text-[#9BAE9C] hover:text-[#F6F3EA] hover:bg-[#202822] cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-5 py-2 rounded-xl text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition shadow-md disabled:opacity-40"
+                  className="btn-interactive px-5 py-2 rounded-xl text-xs font-semibold bg-[#D97745] hover:bg-[#c26535] text-white shadow-sm shadow-[#D97745]/20 cursor-pointer disabled:opacity-40"
                 >
                   {isSubmitting ? 'Saving...' : editingEntry ? 'Update Follow-up' : 'Save Follow-up'}
                 </button>
@@ -789,26 +932,26 @@ export const AbsenteeFollowupView: React.FC = () => {
 
       {/* Details Modal */}
       {selectedDetail && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#1A211C]/80 backdrop-blur-sm animate-in fade-in duration-150">
+          <div className="bg-[#2B352E] border border-[#3D4A41] rounded-2xl w-full max-w-lg p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between pb-3 border-b border-[#3D4A41]">
               <div className="flex items-center gap-2">
                 <UserX className="w-5 h-5 text-amber-400" />
-                <h3 className="font-bold text-white text-sm">Absentee Follow-up Record</h3>
+                <h3 className="font-bold text-[#F6F3EA] text-sm">Absentee Follow-up Record</h3>
               </div>
               <button
                 onClick={() => setSelectedDetail(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+                className="btn-interactive text-[#9BAE9C] hover:text-[#F6F3EA] p-1.5 rounded-lg hover:bg-[#344038] cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="space-y-3 text-xs">
-              <div className="bg-slate-850 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
+              <div className="bg-[#202822] p-3 rounded-xl border border-[#3D4A41] flex justify-between items-center">
                 <div>
-                  <div className="font-bold text-white text-sm">{selectedDetail.studentName}</div>
-                  <div className="text-[11px] text-slate-400">
+                  <div className="font-bold text-[#F6F3EA] text-sm">{selectedDetail.studentName}</div>
+                  <div className="text-[11px] text-[#9BAE9C]">
                     Roll #{selectedDetail.registrationId} • {selectedDetail.class}
                   </div>
                 </div>
@@ -830,36 +973,36 @@ export const AbsenteeFollowupView: React.FC = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 bg-slate-850 p-2.5 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-2 gap-2 bg-[#202822] p-2.5 rounded-xl border border-[#3D4A41]">
                 <div>
-                  <span className="text-slate-400 text-[11px]">Reason:</span>
-                  <p className="font-medium text-slate-200">{selectedDetail.followupReason}</p>
+                  <span className="text-[#9BAE9C] text-[11px]">Reason:</span>
+                  <p className="font-medium text-[#F6F3EA]">{selectedDetail.followupReason}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Action Taken:</span>
-                  <p className="font-medium text-slate-200">{selectedDetail.actionTaken}</p>
+                  <span className="text-[#9BAE9C] text-[11px]">Action Taken:</span>
+                  <p className="font-medium text-[#F6F3EA]">{selectedDetail.actionTaken}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Contact Person:</span>
-                  <p className="font-medium text-slate-200">{selectedDetail.contactPerson}</p>
+                  <span className="text-[#9BAE9C] text-[11px]">Contact Person:</span>
+                  <p className="font-medium text-[#F6F3EA]">{selectedDetail.contactPerson}</p>
                 </div>
                 <div>
-                  <span className="text-slate-400 text-[11px]">Expected Return:</span>
+                  <span className="text-[#9BAE9C] text-[11px]">Expected Return:</span>
                   <p className="font-medium text-emerald-400">{selectedDetail.expectedReturnDate || 'Not specified'}</p>
                 </div>
               </div>
 
               <div>
-                <span className="text-slate-400 block font-medium">Guardian Statement / Response:</span>
-                <p className="text-white mt-0.5 bg-slate-850 p-2.5 rounded-xl border border-slate-800">
+                <span className="text-[#9BAE9C] block font-medium">Guardian Statement / Response:</span>
+                <p className="text-[#F6F3EA] mt-0.5 bg-[#202822] p-2.5 rounded-xl border border-[#3D4A41]">
                   {selectedDetail.responseReceived}
                 </p>
               </div>
 
               {selectedDetail.remarks && (
                 <div>
-                  <span className="text-slate-400 block font-medium">Administrative Remarks:</span>
-                  <p className="text-slate-300 mt-0.5">{selectedDetail.remarks}</p>
+                  <span className="text-[#9BAE9C] block font-medium">Administrative Remarks:</span>
+                  <p className="text-[#F6F3EA]/90 mt-0.5">{selectedDetail.remarks}</p>
                 </div>
               )}
 
@@ -871,10 +1014,21 @@ export const AbsenteeFollowupView: React.FC = () => {
               )}
             </div>
 
-            <div className="pt-2 flex justify-end">
+            <div className="pt-2 flex justify-between items-center">
+              <button
+                type="button"
+                onClick={() => {
+                  handleOpenWhatsAppAlert(selectedDetail);
+                }}
+                className="btn-interactive flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-sm cursor-pointer"
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                <span>Send WhatsApp Alert</span>
+              </button>
+
               <button
                 onClick={() => setSelectedDetail(null)}
-                className="px-4 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition"
+                className="btn-interactive px-4 py-1.5 rounded-xl text-xs font-semibold bg-[#202822] text-[#F6F3EA] hover:bg-[#344038] border border-[#3D4A41] cursor-pointer"
               >
                 Close
               </button>
@@ -882,6 +1036,48 @@ export const AbsenteeFollowupView: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* WhatsApp Quick Alert Modal */}
+      {whatsAppAlertTarget && (
+        <WhatsAppAlertModal
+          isOpen={Boolean(whatsAppAlertTarget)}
+          onClose={() => setWhatsAppAlertTarget(null)}
+          studentName={whatsAppAlertTarget.studentName}
+          rollNo={whatsAppAlertTarget.rollNo}
+          classLevel={whatsAppAlertTarget.classLevel}
+          guardianPhone={whatsAppAlertTarget.phone}
+          date={whatsAppAlertTarget.date}
+          absenceCount={whatsAppAlertTarget.absenceCount}
+          reason={whatsAppAlertTarget.reason}
+        />
+      )}
+
+      {/* Student Profile & History Modal */}
+      {selectedStudentForProfile && (
+        <StudentDetailModal
+          student={selectedStudentForProfile}
+          onClose={() => setSelectedStudentForProfile(null)}
+          onOpenWhatsAppAlert={(student) => {
+            setWhatsAppAlertTarget({
+              studentName: student.name,
+              rollNo: student.rollNo,
+              classLevel: student.class,
+              phone: student.guardianContact || student.phone || '',
+              date: new Date().toISOString().split('T')[0],
+              absenceCount: 1,
+              reason: 'Attendance notification',
+            });
+          }}
+        />
+      )}
+
+      {/* Bulk Import Modal */}
+      <ModuleImportModal
+        isOpen={isImportModalOpen}
+        onClose={() => setIsImportModalOpen(false)}
+        initialModuleType="absentee"
+        onImportComplete={loadData}
+      />
     </div>
   );
 };
