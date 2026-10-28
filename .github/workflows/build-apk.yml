@@ -33,7 +33,25 @@ jobs:
       - name: Install Project Dependencies
         run: bun install --frozen-lockfile
 
+      - name: Validate Supabase Build Configuration
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ]; then
+            echo "::error::Required secret VITE_SUPABASE_URL is missing or empty."
+            exit 1
+          fi
+          if [ -z "$VITE_SUPABASE_ANON_KEY" ]; then
+            echo "::error::Required secret VITE_SUPABASE_ANON_KEY is missing or empty."
+            exit 1
+          fi
+          echo "Supabase build configuration verified."
+
       - name: Build Web Application
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
         run: bun run build
 
       - name: Sync Capacitor Android
